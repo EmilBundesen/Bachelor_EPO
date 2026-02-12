@@ -1,99 +1,282 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+from tkinter import Tk, filedialog
 
-"""
-Dette afsnit renser datasættet for det daglige afkast for 49 industrier
-"""
-df = pd.read_csv(
-    "/Users/emilbundesen/Desktop/Bachelor/Data/49_Industry_Portfolios_Daily.csv",
-    sep=",",
-    header=5,
-)
+#KONSTANTER
+START_DATE = "1985-01-01"
+END_DATE = "2025-12-31"
+TRADING_DAYS_PER_MONTH = 21
+MISSING_VALUES = [-99.99, -999] #fra Kenneth French
+PERCENT_TO_DECIMAL = 100
+TOP_N_INDUSTRIES = 3
+INDUSTRY_DATA_HEADER_ROW = 5 #fra Kenneth French
+RF_DATA_SKIP_ROWS = 3 #fra Kenneth French
 
-df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  # Beholder rækker med faktiske dage
-df = df.rename(columns={df.columns[0]: "Date"})
-df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d")
-df = df.set_index("Date")
-for col in df.columns:
-    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-df.replace([-99.99, -999], np.nan, inplace=True)  # missing data
-
-start_date = "1985-01-01"
-end_date = ("2025-12-31")
-df = df.sort_index()
-df_clean = df.loc[start_date:end_date]
-df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
+# Plot konstanter
+PLOT_WIDTH = 14
+PLOT_HEIGHT = 7
+LINE_WIDTH = 2
 
 
-"""
-Læs og konverter månedlig risikofri rente til daglig rente
-"""
-rf_df = pd.read_csv(
-    "/Users/emilbundesen/Desktop/Bachelor/Data/Månedlig_rf.csv",
-    sep=",",
-    skiprows=3
-)
+# Datarens
 
-# Behold kun rækker med gyldige datoer
-rf_df = rf_df[rf_df.iloc[:,0].astype(str).str.match(r"^\d{6,8}$", na=False)]
-rf_df = rf_df.rename(columns={rf_df.columns[0]: "Date"})
-rf_df["Date"] = pd.to_datetime(rf_df["Date"].astype(str), format="%Y%m")
-rf_df = rf_df.set_index("Date")
+def get_file_path(prompt: str) -> Path:
+    print(prompt)
 
-# Konverter RF-kolonnen til decimal
-rf_df["RF"] = pd.to_numeric(rf_df["RF"], errors="coerce") / 100
+    root = Tk()
+    root.withdraw()
+    root.attributes('-topmost', True)
 
-# Begræns tidsperiode
-rf_df = rf_df.loc[start_date:end_date]
+    # Åbn fil-dialog
+    file_path = filedialog.askopenfilename(
+        title=prompt,
+        filetypes=[
+            ("CSV filer", "*.csv"),
+            ("Alle filer", "*.*")
+        ]
+    )
 
-# Forward-fill RF til alle handelsdage i df_clean
-rf_daily = rf_df.reindex(df_clean.index, method='ffill')
+    root.destroy()
+    if file_path:
+        return Path(file_path)
+    else:
+        print("Ingen fil valgt.")
+        exit()
 
-# Konverter månedlig RF til daglig RF (ca. 21 handelsdage per måned)
-rf_daily["RF"] = (1 + rf_daily["RF"])**(1/21) - 1
 
-"""
-Sanity check
-"""
-print("Industridata shape:", df_clean.shape)
-print("Daglig RF shape:", rf_daily.shape)
-print("Periode:", df_clean.index.min(), "til", df_clean.index.max())
+def load_and_clean_industry_data(filepath: Path, start: str, end: str) -> pd.DataFrame:
 
-"""
-Beregn kumulativt merafkast for hver industri
-"""
-daglig_afkast = df_clean.fillna(0) / 100  # konverter til decimal
+    df = pd.read_csv(filepath, sep=",", header=INDUSTRY_DATA_HEADER_ROW)
+    df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  #Behold kun rækker med faktiske datoer (8 cifre: YYYYMMDD)
 
-daglig_merafkast = daglig_afkast.subtract(rf_daily["RF"], axis=0)
+    df = df.rename(columns={df.columns[0]: "Date"})
+    df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d") #Konverter dato-kolonnen
+    df = df.set_index("Date")
 
-kum_merafkast = (1 + daglig_merafkast).cumprod() - 1
+    for col in df.columns: # Konverter alle kolonner til numeriske værdier
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# Bedste og dårligste industrier
-sidste_dag_afkast = kum_merafkast.iloc[-1]
-top3 = sidste_dag_afkast.sort_values(ascending=False).head(3).index
-bottom3 = sidste_dag_afkast.sort_values(ascending=True).head(3).index
+    df.replace(MISSING_VALUES, np.nan, inplace=True) #Erstat missing values med NaN
 
-print(kum_merafkast)
+    df = df.sort_index() # Filtrér efter dato og fjern duplikater
+    df_clean = df.loc[start:end] #Begrens tidsperiode
+    df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
 
-print(f"Top 3 industrier: {top3}")
-print(f"Dårligste 3 industrier: {bottom3}")
+    return df_clean
 
-"""
-Plot kumulativt merafkast
-"""
-plt.figure(figsize=(14,7))
 
-for industry in top3:
-    plt.plot(kum_merafkast.index, kum_merafkast[industry], label=f"Top: {industry}", linewidth=2)
+def load_and_clean_rf_data(filepath: Path, start: str, end: str) -> pd.DataFrame:
 
-for industry in bottom3:
-    plt.plot(kum_merafkast.index, kum_merafkast[industry], label=f"Bottom: {industry}", linestyle='--', linewidth=2)
+    rf_df = pd.read_csv(filepath, sep=",", skiprows=RF_DATA_SKIP_ROWS)
+    rf_df = rf_df[rf_df.iloc[:, 0].astype(str).str.match(r"^\d{6,8}$", na=False)]# Behold kun rækker med gyldige datoer
 
-plt.title("Kumulativt dagligt merafkast (1985–2025) – Top 3 vs. Bottom 3 industrier")
-plt.xlabel("Date")
-plt.ylabel("Kumulativt merafkast")
-plt.grid(True)
-plt.legend()
-plt.show()
+    rf_df = rf_df.rename(columns={rf_df.columns[0]: "Date"})
+    rf_df["Date"] = pd.to_datetime(rf_df["Date"].astype(str), format="%Y%m") #Konverter dato-kolonnen
+    rf_df = rf_df.set_index("Date")
+
+    rf_df["RF"] = pd.to_numeric(rf_df["RF"], errors="coerce") / PERCENT_TO_DECIMAL # Konverter RF til decimal (i rå format er det i % dvs. vi skal dele med 100)
+    rf_df = rf_df.loc[start:end] # Begræns tidsperiode
+
+    return rf_df
+
+
+def convert_monthly_rf_to_daily(rf_monthly: pd.DataFrame,
+                                trading_dates: pd.DatetimeIndex) -> pd.DataFrame:
+
+    rf_daily = rf_monthly.reindex(trading_dates, method='ffill') #hvis fejl i data, forward fill (gennemsnit af fremtidige værdier)
+    rf_daily["RF"] = (1 + rf_daily["RF"]) ** (1 / TRADING_DAYS_PER_MONTH) - 1 #Konverter månedlig RF til daglig RF
+
+    return rf_daily
+
+
+# ==================== BEREGNINGER ====================
+
+def calculate_excess_returns(returns_df: pd.DataFrame,
+                             rf_daily: pd.DataFrame) -> pd.DataFrame:
+
+    daglig_afkast = returns_df.fillna(0) / PERCENT_TO_DECIMAL #Afkast som decimal
+    daglig_merafkast = daglig_afkast.subtract(rf_daily["RF"], axis=0)
+
+    return daglig_merafkast
+
+
+def calculate_cumulative_returns(excess_returns: pd.DataFrame) -> pd.DataFrame:
+    kum_merafkast = (1 + excess_returns).cumprod() - 1
+    return kum_merafkast
+
+def calculate_log_cumulative_returns(excess_returns: pd.DataFrame) -> pd.DataFrame:
+    log_kum_merafkast = np.log(1 + excess_returns).cumsum()
+    return log_kum_merafkast
+
+
+def identify_top_bottom_industries(cumulative_returns: pd.DataFrame,
+                                   n: int = TOP_N_INDUSTRIES) -> tuple:
+    sidste_dag_afkast = cumulative_returns.iloc[-1]
+    top_industries = sidste_dag_afkast.sort_values(ascending=False).head(n).index
+    bottom_industries = sidste_dag_afkast.sort_values(ascending=True).head(n).index
+
+    return top_industries, bottom_industries
+
+
+def calculate_correlation_matrix(returns_df: pd.DataFrame) -> tuple:
+    correlation_matrix = returns_df.corr()
+
+    # Beregn gennemsnitlig korrelation for hver industri med alle andre
+    avg_correlations = {}
+    for industry in correlation_matrix.columns:
+        # Tag alle korrelationer for denne industri
+        other_correlations = correlation_matrix[industry].drop(industry)
+        avg_correlations[industry] = other_correlations.mean()
+
+    avg_correlation_series = pd.Series(avg_correlations)
+
+    return correlation_matrix, avg_correlation_series
+
+
+# ==================== VISUALISERING ====================
+
+def plot_cumulative_returns(cumulative_returns: pd.DataFrame,
+                            top_industries: pd.Index,
+                            bottom_industries: pd.Index,
+                            title: str = "Kumulativt dagligt merafkast (1985–2025)") -> None:
+
+    plt.figure(figsize=(PLOT_WIDTH, PLOT_HEIGHT))
+
+
+    for industry in top_industries:
+        plt.plot(cumulative_returns.index, cumulative_returns[industry], label=f"Top: {industry}", linewidth=LINE_WIDTH)
+
+    for industry in bottom_industries:
+        plt.plot(cumulative_returns.index, cumulative_returns[industry], label=f"Bottom: {industry}", linestyle='--', linewidth=LINE_WIDTH)
+
+    plt.title(f"{title} – Top {TOP_N_INDUSTRIES} vs. Bottom {TOP_N_INDUSTRIES} industrier")
+    plt.xlabel("Date")
+    plt.ylabel("Kumulativt merafkast")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+
+def plot_correlation_heatmap(correlation_matrix: pd.DataFrame) -> None:
+    plt.figure(figsize=(10, 10))
+
+    sns.heatmap(
+        correlation_matrix,
+        annot=False,  # Vis ikke værdier i hver celle (for mange industrier)
+        cmap='RdYlGn',  # Rød-Gul-Grøn farveskala
+        center=0,  # Center på 0
+        vmin=-1,  # Minimum værdi
+        vmax=1,  # Maximum værdi
+        square=True,  # Firkantede celler
+        linewidths=0.5,  # Linje mellem celler
+        cbar_kws={"shrink": 0.8, "label": "Korrelation"}
+    )
+
+    plt.title("Korrelationsmatrix mellem 49 industrier (1985-2025)", fontsize=16, pad=20)
+    plt.xlabel("Industrier", fontsize=12)
+    plt.ylabel("Industrier", fontsize=12)
+    plt.xticks(rotation=90, fontsize=8)
+    plt.yticks(rotation=0, fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+
+def print_summary_statistics(df_clean: pd.DataFrame,
+                             rf_daily: pd.DataFrame,
+                             top_industries: pd.Index,
+                             bottom_industries: pd.Index,
+                             cumulative_returns: pd.DataFrame,
+                             log_cumulative_returns: pd.DataFrame,
+                             avg_correlations: pd.Series) -> None:
+    rows_in_industry = len(df_clean)
+    rows_in_rf = len(rf_daily)
+
+    print("\n" + "=" * 60)
+    print("SANITY CHECK")
+    print("=" * 60)
+    if rows_in_industry == rows_in_rf:
+        print("Ens antal rækker")
+    else:
+        print("Fejl. Ikke end rækker")
+        print(f"   Forskel: {abs(rows_in_industry - rows_in_rf)} rækker")
+
+    print(f"Periode: {df_clean.index.min()} til {df_clean.index.max()}")
+
+    print("\n" + "=" * 60)
+    print("RESULTATER")
+    print("=" * 60)
+    print(f"\nTop {TOP_N_INDUSTRIES} industrier:")
+    for i, industry in enumerate(top_industries, 1):
+        final_return = cumulative_returns[industry].iloc[-1]
+        print(f"  {i}. {industry}: {final_return:.2f}")
+
+    print(f"\nDårligste {TOP_N_INDUSTRIES} industrier:")
+    for i, industry in enumerate(bottom_industries, 1):
+        final_return = cumulative_returns[industry].iloc[-1]
+        print(f"  {i}. {industry}: {final_return:.2f}")
+
+    print(f"\nLogkumulativt - Top {TOP_N_INDUSTRIES} værdier:")
+    top_log = log_cumulative_returns.iloc[-1].sort_values(ascending=False).head(TOP_N_INDUSTRIES)
+    for industry, value in top_log.items():
+        print(f"  {industry}: {value:.4f}")
+
+    print(f"\nLogkumulativt - Bottom {TOP_N_INDUSTRIES} værdier:")
+    bottom_log = log_cumulative_returns.iloc[-1].sort_values(ascending=True).head(TOP_N_INDUSTRIES)
+    for industry, value in bottom_log.items():
+        print(f"  {industry}: {value:.4f}")
+
+    print(f"\nGennemsnitlig korrelation for hver industri med alle andre:")
+    print("-" * 60)
+    # Sorter efter gennemsnitlig korrelation (højest først)
+    sorted_correlations = avg_correlations.sort_values(ascending=False)
+    for industry, avg_corr in sorted_correlations.items():
+        print(f"  {industry}: {avg_corr:.4f}")
+
+    print(f"\nOverordnet gennemsnit: {avg_correlations.mean():.4f}")
+    print("=" * 60 + "\n")
+
+
+# ==================== HOVEDPROGRAM ====================
+
+def main():
+    industry_file = get_file_path(
+        "Indtast sti til industridata CSV (49_Industry_Portfolios_Daily.csv): "
+    )
+    rf_file = get_file_path(
+        "Indtast sti til risikofri rente CSV (Månedlig_rf.csv): "
+    )
+
+    # Indlæs og rens data
+    df_clean = load_and_clean_industry_data(industry_file, START_DATE, END_DATE)
+    rf_monthly = load_and_clean_rf_data(rf_file, START_DATE, END_DATE)
+    rf_daily = convert_monthly_rf_to_daily(rf_monthly, df_clean.index)
+
+    # Beregn afkast
+    daglig_merafkast = calculate_excess_returns(df_clean, rf_daily)
+    kum_merafkast = calculate_cumulative_returns(daglig_merafkast)
+    log_kum_merafkast = calculate_log_cumulative_returns(daglig_merafkast)
+
+    # Beregn korrelation
+    correlation_matrix, avg_correlations = calculate_correlation_matrix(daglig_merafkast)
+
+    # Identificer top og bund industrier
+    top3, bottom3 = identify_top_bottom_industries(kum_merafkast)
+
+    # Print resultater
+    print_summary_statistics(df_clean, rf_daily, top3, bottom3,
+                             kum_merafkast, log_kum_merafkast, avg_correlations)
+
+    # Visualiser
+    plot_cumulative_returns(kum_merafkast, top3, bottom3,
+                            "Kumulativt dagligt merafkast (1985–2025)")
+    plot_cumulative_returns(log_kum_merafkast, top3, bottom3,
+                            "Logkumulativt dagligt merafkast (1985–2025)")
+
+    # Visualiser korrelation
+    plot_correlation_heatmap(correlation_matrix)
+
+if __name__ == "__main__":
+    main()
