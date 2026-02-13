@@ -5,24 +5,22 @@ import seaborn as sns
 from pathlib import Path
 from tkinter import Tk, filedialog
 
-#KONSTANTER
+#konstanter
 START_DATE = "1985-01-01"
 END_DATE = "2025-12-31"
-TRADING_DAYS_PER_MONTH = 21
 MISSING_VALUES = [-99.99, -999] #fra Kenneth French
 PERCENT_TO_DECIMAL = 100
 TOP_N_INDUSTRIES = 3
 INDUSTRY_DATA_HEADER_ROW = 5 #fra Kenneth French
 RF_DATA_SKIP_ROWS = 3 #fra Kenneth French
 
-# Plot konstanter
+#Plot-konstanter
 PLOT_WIDTH = 14
 PLOT_HEIGHT = 7
 LINE_WIDTH = 2
 
 
-# Datarens
-
+#Datarens
 def get_file_path(prompt: str) -> Path:
     print(prompt)
 
@@ -86,18 +84,25 @@ def load_and_clean_rf_data(filepath: Path, start: str, end: str) -> pd.DataFrame
 def convert_monthly_rf_to_daily(rf_monthly: pd.DataFrame,
                                 trading_dates: pd.DatetimeIndex) -> pd.DataFrame:
 
-    rf_daily = rf_monthly.reindex(trading_dates, method='ffill') #hvis fejl i data, forward fill (gennemsnit af fremtidige værdier)
-    rf_daily["RF"] = (1 + rf_daily["RF"]) ** (1 / TRADING_DAYS_PER_MONTH) - 1 #Konverter månedlig RF til daglig RF
+    rf_daily = rf_monthly.reindex(trading_dates, method='ffill') #fylder daglig afkast med månedlig kast
+    rf_daily["year_month"] = rf_daily.index.to_period("M")
+
+    trading_days_per_month = rf_daily.groupby("year_month").size() #tæller antal handelsdage pr. måned
+
+    rf_daily["trading_days"] = rf_daily["year_month"].map(trading_days_per_month) #mapper med ekstiterende df
+    rf_daily["RF"] = (1 + rf_daily["RF"]) ** (1 / rf_daily["trading_days"]) - 1 #daglig rf
+
+    rf_daily = rf_daily.drop(columns=["year_month", "trading_days"]) #renser for midlertidig kolonne
 
     return rf_daily
 
 
-# ==================== BEREGNINGER ====================
+# beregning
 
 def calculate_excess_returns(returns_df: pd.DataFrame,
                              rf_daily: pd.DataFrame) -> pd.DataFrame:
 
-    daglig_afkast = returns_df.fillna(0) / PERCENT_TO_DECIMAL #Afkast som decimal
+    daglig_afkast = returns_df / PERCENT_TO_DECIMAL  # Konverter til decimal
     daglig_merafkast = daglig_afkast.subtract(rf_daily["RF"], axis=0)
 
     return daglig_merafkast
@@ -108,7 +113,9 @@ def calculate_cumulative_returns(excess_returns: pd.DataFrame) -> pd.DataFrame:
     return kum_merafkast
 
 def calculate_log_cumulative_returns(excess_returns: pd.DataFrame) -> pd.DataFrame:
-    log_kum_merafkast = np.log(1 + excess_returns).cumsum()
+
+    clipped_returns = (1 + excess_returns).clip(lower=1e-10) #sikre strengt positive beregninger
+    log_kum_merafkast = np.log(clipped_returns).cumsum()
     return log_kum_merafkast
 
 
@@ -136,7 +143,7 @@ def calculate_correlation_matrix(returns_df: pd.DataFrame) -> tuple:
     return correlation_matrix, avg_correlation_series
 
 
-# ==================== VISUALISERING ====================
+#visualisering
 
 def plot_cumulative_returns(cumulative_returns: pd.DataFrame,
                             top_industries: pd.Index,
@@ -198,7 +205,7 @@ def print_summary_statistics(df_clean: pd.DataFrame,
     print("SANITY CHECK")
     print("=" * 60)
     if rows_in_industry == rows_in_rf:
-        print("Ens antal rækker")
+        print("Ens antal rækker i industrier og rf")
     else:
         print("Fejl. Ikke end rækker")
         print(f"   Forskel: {abs(rows_in_industry - rows_in_rf)} rækker")
@@ -238,10 +245,19 @@ def print_summary_statistics(df_clean: pd.DataFrame,
     print(f"\nOverordnet gennemsnit: {avg_correlations.mean():.4f}")
     print("=" * 60 + "\n")
 
-
-# ==================== HOVEDPROGRAM ====================
+# main
 
 def main():
+    """
+        Workflow:
+            1. Indlæser daglige data
+            2. Indlæser risikofri rente (månedlige data)
+            3. Konverterer RF til daglig frekvens
+            4. Beregner merafkast, kumulativt afkast og korrelationer
+            5. Identificerer top/bund performende industrier
+            6. Visualiserer resultater
+        """
+
     industry_file = get_file_path(
         "Indtast sti til industridata CSV (49_Industry_Portfolios_Daily.csv): "
     )
