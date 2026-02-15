@@ -100,32 +100,31 @@ def convert_monthly_rf_to_daily(rf_monthly: pd.DataFrame,
 
 
 # beregning
-
 def calculate_excess_returns(returns_df: pd.DataFrame,
                              rf_daily: pd.DataFrame) -> pd.DataFrame:
 
-    daglig_afkast = returns_df / PERCENT_TO_DECIMAL  # Konverter til decimal
-    daglig_merafkast = daglig_afkast.subtract(rf_daily["RF"], axis=0)
+    daily_return = returns_df / PERCENT_TO_DECIMAL  # Konverter til decimal
+    daily_excess_return = daily_return.subtract(rf_daily["RF"], axis=0)
 
-    return daglig_merafkast
+    return daily_excess_return
 
 
 def calculate_cumulative_returns(excess_returns: pd.DataFrame) -> pd.DataFrame:
-    kum_merafkast = (1 + excess_returns).cumprod() - 1
-    return kum_merafkast
+    cum_excess_return = (1 + excess_returns).cumprod() - 1
+    return cum_excess_return
 
 def calculate_log_cumulative_returns(excess_returns: pd.DataFrame) -> pd.DataFrame:
 
     clipped_returns = (1 + excess_returns).clip(lower=1e-10) #sikre strengt positive beregninger
-    log_kum_merafkast = np.log(clipped_returns).cumsum()
-    return log_kum_merafkast
+    log_cum_excess_return = np.log(clipped_returns).cumsum()
+    return log_cum_excess_return
 
 
 def identify_top_bottom_industries(cumulative_returns: pd.DataFrame,
                                    n: int = TOP_N_INDUSTRIES) -> tuple:
-    sidste_dag_afkast = cumulative_returns.iloc[-1]
-    top_industries = sidste_dag_afkast.sort_values(ascending=False).head(n).index
-    bottom_industries = sidste_dag_afkast.sort_values(ascending=True).head(n).index
+    last_day_cum_excess_return = cumulative_returns.iloc[-1]
+    top_industries = last_day_cum_excess_return.sort_values(ascending=False).head(n).index
+    bottom_industries = last_day_cum_excess_return.sort_values(ascending=True).head(n).index
 
     return top_industries, bottom_industries
 
@@ -133,10 +132,8 @@ def identify_top_bottom_industries(cumulative_returns: pd.DataFrame,
 def calculate_correlation_matrix(returns_df: pd.DataFrame) -> tuple:
     correlation_matrix = returns_df.corr()
 
-    # Beregn gennemsnitlig korrelation for hver industri med alle andre
     avg_correlations = {}
-    for industry in correlation_matrix.columns:
-        # Tag alle korrelationer for denne industri
+    for industry in correlation_matrix.columns: #Tag alle korrelationer for denne industri
         other_correlations = correlation_matrix[industry].drop(industry)
         avg_correlations[industry] = other_correlations.mean()
 
@@ -174,13 +171,13 @@ def plot_correlation_heatmap(correlation_matrix: pd.DataFrame) -> None:
 
     sns.heatmap(
         correlation_matrix,
-        annot=False,  # Vis ikke værdier i hver celle (for mange industrier)
-        cmap='RdYlGn',  # Rød-Gul-Grøn farveskala
-        center=0,  # Center på 0
-        vmin=-1,  # Minimum værdi
-        vmax=1,  # Maximum værdi
-        square=True,  # Firkantede celler
-        linewidths=0.5,  # Linje mellem celler
+        annot=False,  #ingen labels (værdier)
+        cmap='RdYlGn',  #farveskala
+        center=0,
+        vmin=-1,
+        vmax=1,
+        square=True,
+        linewidths=0.5,
         cbar_kws={"shrink": 0.8, "label": "Korrelation"}
     )
 

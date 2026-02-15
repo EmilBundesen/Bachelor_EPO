@@ -2,30 +2,32 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 """
 Dette afsnit renser datasættet for det daglige afkast for 49 industrier
 """
+
 df = pd.read_csv(
     "/Users/emilbundesen/Desktop/Bachelor/Data/49_Industry_Portfolios_Daily.csv",
     sep=",",
-    header=5,
-)
+    header=5) #fjerner headers
 
-df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)] #Beholder run rækker med faktiske dage dvs. på formatet yyyymmdd
-df = df.rename(columns={df.columns[0]: "Date"}) #navngivning
-df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d") #Konverter til datatype date
-df = df.set_index("Date") #indeksering
-for col in df.columns: #Konverter resten af kolonner til numerisk
-    df[col] = pd.to_numeric(df[col], errors="coerce")
+midpoint = len(df) // 2
+df = df.iloc[:midpoint] #tager kun value-weigthed daglig afkast
 
-df.replace([-99.99, -999], np.nan, inplace=True) #missing data
+df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  # Behold kun rækker med faktiske datoer
 
-start_date = "1985-01-01" #start for det data vi kigger på (afgrænsning)
-end_date = "2024-12-31" #her går data til både ved rf, så for at undgå metodiske komplikationer
+df = df.rename(columns={df.columns[0]: "Date"})
+df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d") #konvertere til date-format
+df = df.set_index("Date")
+
+for col in df.columns:
+    df[col] = pd.to_numeric(df[col], errors="coerce") #konvertere daglig afkast til numerisk
+
+df.replace([-99.99, -999], np.nan, inplace=True) #fjerner missing values
+
 df = df.sort_index()
-df_clean = df.loc[start_date:end_date] #fjerner rækker udenfor tidsrækken
-df_clean = df_clean[~df_clean.index.duplicated(keep='first')]#Fjerner duplikerede rækker: 10080 rækker = 40 års data
+df_clean = df.loc["1985-01-01":"2025-12-31"]
+df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
 
 """
 Dette afsnit læser og korrigerer for rf, så vi kun analysere på merafkast. Vi bruger daglig rf
@@ -42,7 +44,7 @@ rf_df["Date"] = pd.to_datetime(rf_df["Date"], format="%Y%m%d") #konverterer til 
 rf_df = rf_df.set_index("Date") #indeksere på Date
 
 rf_df["RF"] = pd.to_numeric(rf_df["RF"], errors="coerce") / 100 #omskriver den risikofrie rente til numerisk værdi i pct.
-rf_df = rf_df.loc[start_date:end_date] #fjerner rækker udenfor tidsrækken
+rf_df = rf_df.loc["1985-01-01":"2025-12-31"] #fjerner rækker udenfor tidsrækken
 rf_df = rf_df[~rf_df.index.duplicated(keep='first')] #Fjerner duplikerede rækker: 10080 rækker = 40 års data
 
 """
@@ -96,3 +98,5 @@ plt.ylabel("Kumulativt merafkast")
 plt.grid(True)
 plt.legend()
 plt.show()
+
+print(kum_merafkast)
