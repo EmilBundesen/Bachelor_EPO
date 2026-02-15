@@ -46,21 +46,23 @@ def get_file_path(prompt: str) -> Path:
 
 
 def load_and_clean_industry_data(filepath: Path, start: str, end: str) -> pd.DataFrame:
+    df = pd.read_csv(filepath, sep=",", header=INDUSTRY_DATA_HEADER_ROW) #fjerner headers
+    midpoint = len(df) // 2
+    df = df.iloc[:midpoint] #tager kun value-weigthed daglig afkast
 
-    df = pd.read_csv(filepath, sep=",", header=INDUSTRY_DATA_HEADER_ROW)
-    df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  #Behold kun rækker med faktiske datoer (8 cifre: YYYYMMDD)
+    df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  # Behold kun rækker med faktiske datoer
 
     df = df.rename(columns={df.columns[0]: "Date"})
-    df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d") #Konverter dato-kolonnen
+    df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d") #konvertere til date-format
     df = df.set_index("Date")
 
-    for col in df.columns: # Konverter alle kolonner til numeriske værdier
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce") #konvertere daglig afkast til numerisk
 
-    df.replace(MISSING_VALUES, np.nan, inplace=True) #Erstat missing values med NaN
+    df.replace(MISSING_VALUES, np.nan, inplace=True) #fjerner missing values
 
-    df = df.sort_index() # Filtrér efter dato og fjern duplikater
-    df_clean = df.loc[start:end] #Begrens tidsperiode
+    df = df.sort_index()
+    df_clean = df.loc[start:end]
     df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
 
     return df_clean
