@@ -46,7 +46,7 @@ def get_file_path(prompt: str) -> Path:
 
 
 def load_and_clean_industry_data(filepath: Path, start: str, end: str) -> pd.DataFrame:
-    df = pd.read_csv(filepath, sep=",", header=INDUSTRY_DATA_HEADER_ROW) #fjerner headers
+    df = pd.read_csv(filepath, sep=",", header=INDUSTRY_DATA_HEADER_ROW, low_memory=False) #fjerner headers
     midpoint = len(df) // 2
     df = df.iloc[:midpoint] #tager kun value-weigthed daglig afkast
 
