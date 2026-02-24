@@ -1,186 +1,231 @@
-import pandas as pd
+"""
+EPO Industry Momentum — Equity 1
+Pedersen, Babu & Levine (2021), Table 1 / Table 5
+
+Equity 1 spec (Table 1):
+  - Signal      : XSMOM (Eq. 24–25), 12-month lookback
+  - Risk model  : 60-month equal-weighted rolling window on MONTHLY returns
+                  5% pre-shrinkage of correlation toward identity  (Eq. 10)
+  - Method      : Simple EPO  EPO^s(w) = (1/γ) Σ_w^{-1} s          (Eq. 20)
+                  Σ_w = (1−w)Σ + w·diag(Σ)                          (Eq. 19)
+
+Special case:
+  w = 1.0  →  EPO^s(w=1) = (1/γ) · s_t^i / (σ_t^i)^2
+  (signal-weighted, vol-scaled; equivalent to INDMOM up to normalisation)
+
+Data:
+  - Monthly industry returns from Kenneth French 49-industry file
+  - Monthly RF from Fama-French factors file
+  - NO daily data used for Equity 1
+"""
+
 import numpy as np
+import pandas as pd
 
-from rf_monthly import (
-    get_file_path,
-    load_and_clean_industry_data,
-    load_and_clean_rf_data,
-    PERCENT_TO_DECIMAL
-)
-
-# ---------------------------------------------------------------------------
-# CONSTANTS
-# ---------------------------------------------------------------------------
+# Konstanter
 DATA_START_DATE     = "1927-01-01"
 BACKTEST_START_DATE = "1942-01-01"
 BACKTEST_END_DATE   = "2018-12-31"
 
-LOOKBACK_PERIOD_MONTHS = 12   # 12-month return signal (XSMOM)
-RISK_WINDOW_MONTHS     = 60   # 60-month equal-weighted risk model (Table 1, Equity 1)
-GAMMA                  = 3.0  # Risk aversion (cancels in Sharpe)
-MIN_VOLATILITY         = 0.001
+LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
+RISK_WINDOW      = 60    # Rolling window for covariance estimation (months)
+CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
+GAMMA            = 3     # Risk aversion γ (cancels in Sharpe ratio)
+MIN_VOL          = 1e-4  # Floor on vol to avoid division by zero
 
-# 5% pre-shrinkage toward identity for the correlation matrix (Equity 1: "5% shrunk")
-CORR_PRESHRINK = 0.05
+CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
+MIN_HISTORY_OOS  = 180 #15 år
+PERCENT_TO_DECIMAL   = 100.0
+Missing_values = [-99.99, -999]
 
-CANDIDATE_WS = [0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.0]
+#Dataindlæsning - månedlig
+def get_monthly_return() -> pd.DataFrame:
+    df = pd.read_csv(
+        "/Users/emilbundesen/Desktop/Bachelor/Data/49_Industry_monthly.csv",
+        sep=",",
+        header=6
+    )
 
-# Minimum history for OOS ω-selection (15 years = 180 months)
-MIN_HISTORY_FOR_OOS = 180
+    df = df.iloc[:1194]  # begræns periode
+    df = df[df[df.columns[0]].astype(str).str.match(r"^\d{6}$", na=False)]
+    df = df.rename(columns={df.columns[0]: "Date"})
+    df["Date"] = pd.to_datetime(df["Date"], format="%Y%m")
+    df = df.set_index("Date")
 
+    df = df.apply(pd.to_numeric, errors="coerce")
+    df.replace(Missing_values, np.nan, inplace=True)
+    df = df.sort_index()
+    df = df.loc[DATA_START_DATE:BACKTEST_END_DATE]
+    df = df[~df.index.duplicated(keep="first")]
 
-# ---------------------------------------------------------------------------
-# Helper utilities
-# ---------------------------------------------------------------------------
+    return df
 
-def convert_daily_to_monthly_returns(daily_returns: pd.DataFrame) -> pd.DataFrame:
-    daily_decimal = daily_returns / PERCENT_TO_DECIMAL
+def get_monthly_risk() -> pd.DataFrame:
+    rf_df = pd.read_csv(
+        "/Users/emilbundesen/Desktop/Bachelor/Data/Månedlig_rf.csv",
+        sep=",",
+        skiprows=3
+    )
+    rf_df = rf_df[rf_df.iloc[:, 0].astype(str).str.match(r"^\d{6,8}$", na=False)]
+    rf_df = rf_df.rename(columns={rf_df.columns[0]: "Date"})
+    rf_df["Date"] = pd.to_datetime(rf_df["Date"].astype(str), format="%Y%m")
+    rf_df = rf_df.set_index("Date")
 
-    # Beregn månedlige afkast
-    monthly = (1 + daily_decimal).resample('ME').prod() - 1
+    rf_df["RF"] = pd.to_numeric(rf_df["RF"], errors="coerce") / PERCENT_TO_DECIMAL
+    rf_df = rf_df.loc[DATA_START_DATE:BACKTEST_END_DATE]
 
-    # Hvis ALLE daglige værdier i måneden er NaN → sæt månedens afkast til NaN
-    all_nan = daily_decimal.resample('ME').apply(lambda x: x.isna().all())
-    monthly[all_nan] = np.nan
+    return rf_df
 
-    return monthly
+def calculate_monthly_excess_returns(returns_df: pd.DataFrame,
+                                    rf_monthly: pd.DataFrame) -> pd.DataFrame:
+    returns_decimal = returns_df / PERCENT_TO_DECIMAL
+    excess = returns_decimal.subtract(rf_monthly["RF"], axis=0)
+    return excess
 
+# Dataindlæsning daglig
+def convert_monthly_rf_to_daily(rf_monthly: pd.DataFrame,
+                                trading_dates: pd.DatetimeIndex) -> pd.DataFrame:
 
+    rf_daily = rf_monthly.reindex(trading_dates, method='ffill')
+    rf_daily["year_month"] = rf_daily.index.to_period("M")
+    trading_days_per_month = rf_daily.groupby("year_month").size()
+    rf_daily["trading_days"] = rf_daily["year_month"].map(trading_days_per_month)
+    rf_daily["RF"] = (1 + rf_daily["RF"]) ** (1 / rf_daily["trading_days"]) - 1
+    rf_daily = rf_daily.drop(columns=["year_month", "trading_days"])
+    return rf_daily
 
-def calculate_monthly_excess_returns(monthly_returns: pd.DataFrame,
-                                     rf_monthly: pd.DataFrame) -> pd.DataFrame:
-    # Align indices to month-end timestamps
-    mr = monthly_returns.copy()
-    mr.index = mr.index.to_period('M').to_timestamp('M')
+def get_daily_return() -> pd.DataFrame:
+    df = pd.read_csv(
+        "/Users/emilbundesen/Desktop/Bachelor/Data/49_Industry_Portfolios_Daily.csv",
+        sep=",",
+        header=5,
+        low_memory=False
+    )
 
-    rf = rf_monthly.copy()
-    rf.index = rf.index.to_period('M').to_timestamp('M')
+    midpoint = len(df) // 2
+    df = df.iloc[:midpoint]  # tager kun value-weigthed daglig afkast
 
-    # Find common dates
-    common = mr.index.intersection(rf.index)
+    df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  # Behold kun rækker med faktiske datoer
 
-    # Compute excess returns WITHOUT filling missing data with 0
-    excess = mr.loc[common].subtract(rf.loc[common, "RF"], axis=0)
+    df = df.rename(columns={df.columns[0]: "Date"})
+    df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d")  # konvertere til date-format
+    df = df.set_index("Date")
 
-    # Mask missing monthly returns → NaN instead of 0 - rf
-    excess = excess.where(mr.loc[common].notna())
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")  # konvertere daglig afkast til numerisk
 
+    df.replace(Missing_values, np.nan, inplace=True)  # fjerner missing values
+
+    df = df.sort_index()
+    df_clean = df.loc[DATA_START_DATE:BACKTEST_END_DATE]
+    df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
+
+    return df_clean
+
+def calculate_daily_excess_returns(returns_df: pd.DataFrame,
+                                  rf_daily: pd.DataFrame) -> pd.DataFrame:
+    returns_decimal = returns_df / PERCENT_TO_DECIMAL
+    excess = returns_decimal.subtract(rf_daily["RF"], axis=0)
     return excess
 
 
+# XSMOM - Signal - (lign. 24–25).
 
-def subset(df, start, end):
-    return df.loc[(df.index >= pd.to_datetime(start)) &
-                  (df.index <= pd.to_datetime(end))]
+def compute_xsmom(monthly_ret: pd.DataFrame,
+                  lookback: int = LOOKBACK_MONTHS) -> pd.DataFrame:
+    roll = (monthly_ret
+            .rolling(window=lookback, min_periods=lookback)
+            .sum())
 
+    out = pd.DataFrame(np.nan, index=roll.index, columns=roll.columns)
 
-# ---------------------------------------------------------------------------
-# XSMOM signal  —  Equations 24–25 in the paper
-# ---------------------------------------------------------------------------
-
-def calculate_xsmom_signal(monthly_returns: pd.DataFrame,
-                           lookback_months: int = LOOKBACK_PERIOD_MONTHS
-                           ) -> pd.DataFrame:
-    # Ensure missing data stays NaN
-    monthly_returns = monthly_returns.where(monthly_returns.notna())
-
-    # Rolling 12-month sum, shifted by 1 so we never use current-month return
-    rolling = monthly_returns.rolling(window=lookback_months).sum().shift(1)
-
-    # Demeaned across industries at each date
-    raw = rolling.subtract(rolling.mean(axis=1), axis=0)
-
-    out = pd.DataFrame(np.nan, index=raw.index, columns=raw.columns)
-
-    for date in raw.index:
-        row = raw.loc[date].dropna()
-        if len(row) == 0:
+    for date, row in roll.iterrows():
+        avail = row.dropna()
+        if len(avail) < 2:
             continue
-        pos_sum = row[row > 0].sum()
-        neg_sum = row[row < 0].sum()
-        if pos_sum == 0 or neg_sum == 0:
+
+        demeaned = avail - avail.mean()        # cross-sectional demean
+
+        pos = demeaned[demeaned > 0].sum()
+        neg = demeaned[demeaned < 0].sum()
+        if pos == 0 or neg == 0:
             continue
-        c_t = 1.0 / max(pos_sum, abs(neg_sum))
-        out.loc[date, row.index] = c_t * row
+
+        c_t = 1.0 / max(pos, abs(neg))        # Eq. 25
+        out.loc[date, demeaned.index] = c_t * demeaned
 
     return out
 
 
-# ---------------------------------------------------------------------------
-# 60-month equal-weighted risk model  —  Table 1, Equity 1
-# ---------------------------------------------------------------------------
-
-def calculate_monthly_risk_model(monthly_excess: pd.DataFrame,
-                                 window_months: int = RISK_WINDOW_MONTHS,
-                                 corr_preshrink: float = CORR_PRESHRINK,
-                                 verbose: bool = True):
-    """
-    Returns:
-        corr_dict[date] : 5%-pre-shrunk correlation matrix (toward identity, simple EPO)
-        vols_dict[date] : per-industry volatility (monthly std, ddof=1)
-    """
-    idx  = monthly_excess.index
+#Risikomodel
+def compute_risk_model(monthly_excess, window=RISK_WINDOW,
+                       theta=CORR_PRESHRINK, verbose=True):
+    idx = monthly_excess.index
     cols = monthly_excess.columns
     data = monthly_excess.values.astype(np.float64)
 
     corr_dict = {}
     vols_dict = {}
 
-    n_total     = len(idx)
-    total_iters = n_total - window_months
-    report_every = max(1, total_iters // 20)
+    n_total = len(idx)
+    n_iters = n_total - window
+    report = max(1, n_iters // 20)
 
-    for i in range(window_months, n_total):
-        if verbose and (i - window_months) % report_every == 0:
-            pct = 100.0 * (i - window_months) / total_iters
-            print(f"  Risk model: {pct:5.1f}%  "
-                  f"(step {i - window_months}/{total_iters})", flush=True)
+    for i in range(window, n_total):
+        if verbose and (i - window) % report == 0:
+            pct = 100.0 * (i - window) / n_iters
 
-        date   = idx[i]
-        window = data[i - window_months: i]
+        date = idx[i]
+        window_data = data[i - window: i]
 
-        valid_mask = ~np.all(np.isnan(window), axis=0)
-        if not np.any(valid_mask):
+        # Behold KUN industrier med FULD historik — ingen NaN-imputation
+        n_obs = np.sum(~np.isnan(window_data), axis=0)
+        valid = n_obs == window  # kræv præcis fuld historik
+
+        if valid.sum() < 2:
+            # Fallback: brug industrier med mindst 90% af observationer
+            valid = n_obs >= int(0.9 * window)
+            if valid.sum() < 2:
+                continue
+
+        W = window_data[:, valid]
+        c = cols[valid]
+
+        # Fjern rækker med NaN (de få resterende efter 90% filter)
+        row_complete = ~np.isnan(W).any(axis=1)
+        W = W[row_complete]
+
+        if W.shape[0] < 2:
             continue
-        w = window[:, valid_mask]
-        c = cols[valid_mask]
 
-        nobs_ok = np.sum(~np.isnan(w), axis=0) >= 2
-        if not np.any(nobs_ok):
+        K = W.shape[0]
+
+        # Artiklens kovariansestimator (footnote 17) — ingen imputation
+        W_dm = W - W.mean(axis=0)
+        Sigma_raw = (W_dm.T @ W_dm) / (K - 1)
+
+        # Udtræk vol
+        var_diag = np.diag(Sigma_raw)
+        nonzero = var_diag > MIN_VOL ** 2
+        if nonzero.sum() < 2:
             continue
-        w = w[:, nobs_ok]
-        c = c[nobs_ok]
 
-        vol = np.nanstd(w, axis=0, ddof=1)
-        nonzero = vol > 0
-        if not np.any(nonzero):
-            continue
-        w   = w[:, nonzero]
-        vol = vol[nonzero]
-        c   = c[nonzero]
+        Sigma_raw = Sigma_raw[np.ix_(nonzero, nonzero)]
+        c = c[nonzero]
+        vol = np.sqrt(np.diag(Sigma_raw))
 
-        # NaN-safe sample correlation matrix Ω_sample
-        col_means = np.nanmean(w, axis=0)
-        X_dm = w - col_means
-        X0   = np.where(np.isnan(X_dm), 0.0, X_dm)
-        cov_pw = X0.T @ X0
-        ss     = (X0 ** 2).sum(axis=0)
-        denom  = np.sqrt(np.outer(ss, ss))
-        with np.errstate(invalid='ignore', divide='ignore'):
-            corr_sample = np.where(denom > 0, cov_pw / denom, 0.0)
-        np.fill_diagonal(corr_sample, 1.0)
+        # Korrelationsmatrix
+        denom = np.outer(vol, vol)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            corr_s = np.where(denom > 0, Sigma_raw / denom, 0.0)
+        np.fill_diagonal(corr_s, 1.0)
+        corr_s = np.clip(corr_s, -1.0, 1.0)
 
-        # ------------------------------------------------------------------
-        # Simple EPO-style correlation shrinkage:
-        #   Ω_shrunk = (1 - λ) Ω_sample + λ I
-        # i.e. off-diagonals scaled by (1 - λ), diagonals stay at 1.
-        # ------------------------------------------------------------------
-        lam = corr_preshrink  # 0.05 for Equity 1
-        n = corr_sample.shape[0]
-        I = np.eye(n)
-        corr = (1.0 - lam) * corr_sample + lam * I
+        # Pre-shrinkage
+        n = len(c)
+        corr_p = (1.0 - theta) * corr_s + theta * np.eye(n)
 
-        corr_dict[date] = pd.DataFrame(corr, index=c, columns=c)
+        corr_dict[date] = pd.DataFrame(corr_p, index=c, columns=c)
         vols_dict[date] = pd.Series(vol, index=c)
 
     if verbose:
@@ -189,466 +234,455 @@ def calculate_monthly_risk_model(monthly_excess: pd.DataFrame,
     return corr_dict, vols_dict
 
 
+#EPO vægte (lign. 19 og 20)
 
+def epo_weights(signal:  pd.Series,
+                corr:    pd.DataFrame,
+                vols:    pd.Series,
+                gamma:   float,
+                w:       float,
+                min_vol: float = MIN_VOL) -> pd.Series:
 
-# ---------------------------------------------------------------------------
-# EPO weights  —  Simple EPO, Equations 19–20
-# ---------------------------------------------------------------------------
-
-def calculate_epo_weights(signal: pd.Series,
-                          corr_matrix: pd.DataFrame,
-                          volatilities: pd.Series,
-                          gamma: float,
-                          w: float,
-                          min_vol: float = MIN_VOLATILITY) -> pd.Series:
-    # Align assets
     common = (signal.dropna().index
-                     .intersection(corr_matrix.index)
-                     .intersection(volatilities.index))
-    if len(common) == 0:
+              .intersection(corr.index)
+              .intersection(vols.index))
+    if len(common) < 2:
         return pd.Series(dtype=float)
 
-    s   = signal.loc[common]
-    C   = corr_matrix.loc[common, common]
-    vol = volatilities.loc[common]
+    s_vec = signal.loc[common]
+    C     = corr.loc[common, common]
+    v     = vols.loc[common]
 
-    # Drop near-zero vol assets
-    ok  = vol >= min_vol
-    s   = s[ok];  vol = vol[ok];  C = C.loc[ok, ok]
-    if len(s) == 0:
+    # Drop near-zero-vol industries
+    ok    = v >= min_vol
+    s_vec = s_vec[ok]; v = v[ok]; C = C.loc[ok, ok]
+    if len(s_vec) < 2:
         return pd.Series(dtype=float)
 
-    vol_v = vol.values
-    s_v   = s.values
+    v_a = v.values
+    s_a = s_vec.values
+    C_a = C.values
 
-    # Σ = D Ω D
-    Sigma = C.values * np.outer(vol_v, vol_v)
+    # Step 1: Σ = D · Ω̃ · D
+    Sigma   = C_a * np.outer(v_a, v_a)
 
-    # diag(Σ)
+    # Step 2: Σ_w = (1−w)·Σ + w·diag(Σ)   (Eq. 19)
     Sigma_d = np.diag(np.diag(Sigma))
-
-    # Equation (19): Σ_w = (1 - w) Σ + w diag(Σ)
     Sigma_w = (1.0 - w) * Sigma + w * Sigma_d
 
+    # Step 3: x = (1/γ) · Σ_w^{-1} · s   (Eq. 20)
     try:
         Sigma_inv = np.linalg.inv(Sigma_w)
     except np.linalg.LinAlgError:
         Sigma_inv = np.linalg.pinv(Sigma_w)
 
-    # Equation (20): x_raw = (1/γ) Σ_w^{-1} s
-    x_raw = (1.0 / gamma) * (Sigma_inv @ s_v)
-    x_raw_s = pd.Series(x_raw, index=s.index)
+    x_raw = (1.0 / gamma) * (Sigma_inv @ s_a)
+    x_s   = pd.Series(x_raw, index=s_vec.index)
 
-    # Unit-leverage normalisation (same convention as XSMOM / INDMOM)
-    pos_sum = x_raw_s[x_raw_s > 0].sum()
-    neg_sum = x_raw_s[x_raw_s < 0].sum()
-    if pos_sum == 0 or neg_sum == 0:
+    # Step 4: Unit-leverage normalisation
+    pos = x_s[x_s > 0].sum()
+    neg = x_s[x_s < 0].sum()
+    if pos == 0 or neg == 0:
         return pd.Series(dtype=float)
 
-    c = 1.0 / max(pos_sum, abs(neg_sum))
-    return c * x_raw_s
+    return x_s / max(pos, abs(neg))
 
 
-# ---------------------------------------------------------------------------
-# EPO backtest for a single fixed w
-# ---------------------------------------------------------------------------
+#Backtest
 
-def backtest_epo_fixed_w(monthly_excess: pd.DataFrame,
-                         signals: pd.DataFrame,
-                         corr_dict: dict,
-                         vols_dict: dict,
-                         gamma: float,
-                         w: float) -> pd.Series:
-    idx        = monthly_excess.index
-    risk_dates = set(corr_dict.keys())
+def backtest_strategy(monthly_excess: pd.DataFrame,
+                      weight_fn,
+                      name: str) -> pd.Series:
+
+    idx = monthly_excess.index
+    rets, dates = [], []
+
+    for t in range(len(idx) - 1):
+        date = idx[t]
+        wts  = weight_fn(date)
+        if len(wts) == 0:
+            continue
+
+        nxt   = idx[t + 1]
+        r     = monthly_excess.loc[nxt, wts.index].dropna()
+        if len(r) == 0:
+            continue
+
+        w_aln = wts.reindex(r.index).dropna()
+        r_aln = r.reindex(w_aln.index)
+        rets.append((w_aln.values * r_aln.values).sum())
+        dates.append(nxt)
+
+    return pd.Series(rets, index=dates, name=name)
+
+
+def backtest_epo_fixed_w(monthly_excess, signals, corr_dict, vols_dict,
+                         gamma, w) -> pd.Series:
+    """EPO with a fixed shrinkage parameter w."""
+    risk_dates = set(corr_dict)
     sig_dates  = set(signals.index)
-    rets, dates = [], []
 
-    for t, date in enumerate(idx[:-1]):
+    def weight_fn(date):
         if date not in risk_dates or date not in sig_dates:
-            continue
+            return pd.Series(dtype=float)
+        return epo_weights(signals.loc[date], corr_dict[date],
+                           vols_dict[date], gamma, w)
 
-        weights = calculate_epo_weights(
-            signals.loc[date], corr_dict[date], vols_dict[date], gamma, w
-        )
-        if len(weights) == 0:
-            continue
-
-        next_date = idx[t + 1]
-        r = monthly_excess.loc[next_date, weights.index]
-        rets.append((weights.values * r.values).sum())
-        dates.append(next_date)
-
-    return pd.Series(rets, index=dates, name=f"EPO_w_{w:.2f}")
+    return backtest_strategy(monthly_excess, weight_fn,
+                             name=f"EPO_w_{w:.2f}")
 
 
-# ---------------------------------------------------------------------------
-# INDMOM benchmark  (Moskowitz & Grinblatt 1999)
-# ---------------------------------------------------------------------------
-
-def calculate_indmom_benchmark(monthly_excess: pd.DataFrame,
-                               signals: pd.DataFrame) -> pd.Series:
-    idx       = monthly_excess.index
+def backtest_indmom(monthly_excess: pd.DataFrame,
+                    signals: pd.DataFrame) -> pd.Series:
+    """
+    INDMOM benchmark: apply XSMOM signal weights directly, without any
+    covariance-based optimisation.
+    """
     sig_dates = set(signals.index)
-    rets, dates = [], []
 
-    for t, date in enumerate(idx[:-1]):
+    def weight_fn(date):
         if date not in sig_dates:
-            continue
-        s = signals.loc[date].dropna()
-        if len(s) == 0:
-            continue
-        next_date = idx[t + 1]
-        common = s.index.intersection(monthly_excess.columns)
-        r = monthly_excess.loc[next_date, common]
-        rets.append((s.loc[common].values * r.values).sum())
-        dates.append(next_date)
+            return pd.Series(dtype=float)
+        return signals.loc[date].dropna()   # already unit-leverage normalised
 
-    return pd.Series(rets, index=dates, name="INDMOM")
+    return backtest_strategy(monthly_excess, weight_fn, name="INDMOM")
 
-
-# ---------------------------------------------------------------------------
-# 1/N benchmark  (equal-weight, forward return)
-# ---------------------------------------------------------------------------
 
 def backtest_equal_weight(monthly_excess: pd.DataFrame) -> pd.Series:
-    fwd = monthly_excess.shift(-1)
-    ew_ret = fwd.mean(axis=1).iloc[:-1]
-    ew_ret.name = "EW_1N"
-    return ew_ret
-
-
-# ---------------------------------------------------------------------------
-# MVO benchmark (no correlation shrinkage at all)
-# ---------------------------------------------------------------------------
-
-def backtest_mvo_no_shrink(monthly_excess: pd.DataFrame,
-                           signals: pd.DataFrame,
-                           corr_dict_raw: dict,
-                           vols_dict: dict,
-                           gamma: float) -> pd.Series:
-    idx        = monthly_excess.index
-    risk_dates = set(corr_dict_raw.keys())
-    sig_dates  = set(signals.index)
+    """1/N equal-weight benchmark across all available industries each month."""
+    idx = monthly_excess.index
     rets, dates = [], []
 
-    for t, date in enumerate(idx[:-1]):
+    for t in range(len(idx) - 1):
+        nxt = idx[t + 1]
+        r   = monthly_excess.loc[nxt].dropna()
+        if len(r) == 0:
+            continue
+        rets.append(r.mean())
+        dates.append(nxt)
+
+    return pd.Series(rets, index=dates, name="EW_1N")
+
+
+def backtest_mvo_no_shrink(monthly_excess, signals, corr_dict_raw,
+                            vols_dict, gamma) -> pd.Series:
+
+    risk_dates = set(corr_dict_raw)
+    sig_dates  = set(signals.index)
+
+    def weight_fn(date):
         if date not in risk_dates or date not in sig_dates:
-            continue
+            return pd.Series(dtype=float)
+        return epo_weights(signals.loc[date], corr_dict_raw[date],
+                           vols_dict[date], gamma, w=0.0)
 
-        corr = corr_dict_raw[date]
-        vol  = vols_dict[date]
-        s    = signals.loc[date].dropna()
-
-        common = s.index.intersection(corr.index).intersection(vol.index)
-        if len(common) == 0:
-            continue
-
-        C   = corr.loc[common, common].values
-        v   = vol.loc[common].values
-        s_v = s.loc[common].values
-
-        Sigma = C * np.outer(v, v)
-
-        try:
-            Sigma_inv = np.linalg.inv(Sigma)
-        except np.linalg.LinAlgError:
-            Sigma_inv = np.linalg.pinv(Sigma)
-
-        w_raw = (1.0 / gamma) * (Sigma_inv @ s_v)
-        w_raw_s = pd.Series(w_raw, index=common)
-
-        pos_sum = w_raw_s[w_raw_s > 0].sum()
-        neg_sum = w_raw_s[w_raw_s < 0].sum()
-        if pos_sum == 0 or neg_sum == 0:
-            continue
-        c = 1.0 / max(pos_sum, abs(neg_sum))
-        w_norm = c * w_raw_s
-
-        next_date = idx[t + 1]
-        r = monthly_excess.loc[next_date, common]
-        rets.append((w_norm.values * r.values).sum())
-        dates.append(next_date)
-
-    return pd.Series(rets, index=dates, name="MVO_no_shrink")
+    return backtest_strategy(monthly_excess, weight_fn, name="MVO_no_shrink")
 
 
-# ---------------------------------------------------------------------------
-# Performance metrics
-# ---------------------------------------------------------------------------
+# Dynamisk EPO OOS
 
-def gross_sharpe(returns: pd.Series) -> float:
-    returns = returns.dropna()
-    if len(returns) == 0:
-        return np.nan
-    s = returns.std()
-    return 0.0 if s == 0 else (returns.mean() / s) * np.sqrt(12)
-
-
-def calculate_performance_metrics(returns: pd.Series, name: str) -> dict:
-    returns = returns.dropna()
-    if len(returns) == 0:
-        return {k: np.nan for k in
-                ["Strategy", "Total Return", "Annualized Return",
-                 "Annualized Vol", "Sharpe", "Win Rate",
-                 "Best Month", "Worst Month"]}
-    cum   = (1 + returns).prod() - 1
-    n_yrs = len(returns) / 12
-    ann_r = (1 + cum) ** (1 / n_yrs) - 1
-    vol_a = returns.std() * np.sqrt(12)
-    return {
-        "Strategy":          name,
-        "Total Return":      cum,
-        "Annualized Return": ann_r,
-        "Annualized Vol":    vol_a,
-        "Sharpe":            gross_sharpe(returns),
-        "Win Rate":          (returns > 0).mean(),
-        "Best Month":        returns.max(),
-        "Worst Month":       returns.min(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Build EPO panel (all candidate w values, full sample)
-# ---------------------------------------------------------------------------
-
-def build_epo_panel(monthly_excess: pd.DataFrame,
-                    signals: pd.DataFrame,
-                    corr_dict: dict,
-                    vols_dict: dict,
-                    gamma: float,
-                    candidate_ws: list) -> pd.DataFrame:
-    series_list = []
+def build_epo_panel(monthly_excess, signals, corr_dict, vols_dict,
+                    gamma, candidate_ws) -> pd.DataFrame:
+    """Run all fixed-w EPO strategies and collect into a single panel."""
+    parts = []
     for w in candidate_ws:
-        print(f"  Running EPO for w={w:.2f} …")
-        s = backtest_epo_fixed_w(
-            monthly_excess, signals, corr_dict, vols_dict, gamma, w
-        )
-        series_list.append(s)
-    return pd.concat(series_list, axis=1).sort_index()
+        print(f"  w = {w:.2f} …", flush=True)
+        parts.append(backtest_epo_fixed_w(
+            monthly_excess, signals, corr_dict, vols_dict, gamma, w))
+    return pd.concat(parts, axis=1).sort_index()
 
 
-# ---------------------------------------------------------------------------
-# Out-of-sample (dynamic) EPO  —  paper's primary OOS EPO strategy
-# ---------------------------------------------------------------------------
+def build_dynamic_oos_epo(panel: pd.DataFrame,
+                          oos_start: str,
+                          min_history: int = MIN_HISTORY_OOS) -> pd.Series:
 
-def build_dynamic_epo(panel_epo: pd.DataFrame,
-                      oos_start: str,
-                      min_history: int = MIN_HISTORY_FOR_OOS) -> pd.Series:
-    panel = panel_epo.dropna(how="all").sort_index()
+    panel = panel.sort_index().dropna(how="all")
+    t0 = pd.to_datetime(oos_start)
 
-    cols      = panel.columns
-    dyn_rets  = []
-    dyn_dates = []
-
-    t0_oos = pd.to_datetime(oos_start)
+    # Find første dato hvor vi har min_history måneder af historik
+    # og datoen er >= oos_start
+    rets, dates = [], []
 
     for i in range(1, len(panel)):
         date = panel.index[i]
 
-        # Only record returns from the OOS start onwards
-        if date < t0_oos:
+        # Kun datoer fra og med oos_start
+        if date < t0:
             continue
 
-        past = panel.iloc[:i]   # all history available before date t
+        past = panel.iloc[:i]  # al historik før dato t
 
+        # Kræv mindst min_history måneder
         if len(past) < min_history:
             continue
 
-        best_w  = None
-        best_sr = -np.inf
-
-        for c in cols:
-            r = past[c].dropna()
+        # Vælg w* = argmax Sharpe over al tilgængelig historik
+        best_w, best_sr = None, -np.inf
+        for col in panel.columns:
+            r = past[col].dropna()
             if len(r) < min_history:
                 continue
-            sr = gross_sharpe(r)
+            sr = sharpe_ratio(r)
             if sr > best_sr:
                 best_sr = sr
-                best_w  = c
+                best_w = col
 
         if best_w is None:
             continue
 
-        dyn_rets.append(panel.loc[date, best_w])
-        dyn_dates.append(date)
+        rets.append(panel.loc[date, best_w])
+        dates.append(date)
 
-    return pd.Series(dyn_rets, index=dyn_dates, name="EPO_dynamic_OOS")
-
-
-# ---------------------------------------------------------------------------
-# Raw (no pre-shrinkage) risk model — used only for the MVO benchmark
-# ---------------------------------------------------------------------------
-
-def calculate_monthly_risk_model_raw(monthly_excess: pd.DataFrame,
-                                     window_months: int = RISK_WINDOW_MONTHS,
-                                     verbose: bool = False):
-    """Identical to calculate_monthly_risk_model but with corr_preshrink=0."""
-    return calculate_monthly_risk_model(
-        monthly_excess,
-        window_months=window_months,
-        corr_preshrink=0.0,
-        verbose=verbose
-    )
+    s = pd.Series(rets, index=dates, name="EPO_OOS_dynamic")
+    print(f"  OOS EPO første handel: {s.index.min().strftime('%Y-%m')}")
+    print(f"  OOS EPO observationer: {len(s)}")
+    return s
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+# Performance
+def sharpe_ratio(r: pd.Series) -> float:
+    """Annualised Sharpe ratio (monthly data, annualised by √12)."""
+    r = r.dropna()
+    if len(r) < 2:
+        return np.nan
+    s = r.std(ddof=1)
+    return float((r.mean() / s) * np.sqrt(12)) if s > 0 else np.nan
 
+
+def performance_summary(r: pd.Series, name: str) -> dict:
+    r    = r.dropna()
+    nyrs = len(r) / 12.0
+    cum  = (1 + r).prod() - 1
+    return {
+        "Strategy":    name,
+        "Ann. Return": round((1 + cum) ** (1 / nyrs) - 1, 4) if nyrs > 0 else np.nan,
+        "Ann. Vol":    round(r.std(ddof=1) * np.sqrt(12), 4),
+        "Sharpe":      round(sharpe_ratio(r), 3),
+        "Win Rate":    round((r > 0).mean(), 3),
+        "Best Month":  round(r.max(), 4),
+        "Worst Month": round(r.min(), 4),
+        "N months":    len(r),
+    }
+
+
+def subset(df, start, end):
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    return df.loc[(df.index >= s) & (df.index <= e)]
+
+def verify_xsmom(xsmom: pd.DataFrame, monthly_ret: pd.DataFrame):
+    """
+    Verificerer at XSMOM er korrekt implementeret ved at tjekke:
+    1. Unit leverage: positive vægte summer til ~1, negative til ~-1
+    2. Cross-sectional demean: vægte summer til ~0 hver måned
+    3. Signal retning: høj momentum → positiv vægt
+    """
+    print("\n" + "="*55)
+    print("XSMOM SIGNAL VERIFIKATION")
+    print("="*55)
+
+    # Tjek et specifikt eksempel: januar 2005
+    test_date = pd.Timestamp("2014-06-01")
+    # Find nærmeste dato
+    available = xsmom.index[xsmom.index >= test_date]
+    if len(available) == 0:
+        print("Ingen dato fundet")
+        return
+    test_date = available[0]
+
+    signal = xsmom.loc[test_date].dropna()
+    print(f"\nTestdato: {test_date.strftime('%Y-%m')}")
+    print(f"Antal industrier med signal: {len(signal)}")
+
+    # Check 1: Summer til 0 (cross-sectional neutral)
+    print(f"\nCheck 1 — Summer til 0 (CS neutral):")
+    print(f"  Sum af alle vægte: {signal.sum():.6f}  (skal være ~0)")
+
+    # Check 2: Unit leverage
+    pos = signal[signal > 0].sum()
+    neg = signal[signal < 0].sum()
+    print(f"\nCheck 2 — Unit leverage:")
+    print(f"  Sum positive vægte: {pos:.4f}  (skal være ~1.0)")
+    print(f"  Sum negative vægte: {neg:.4f}  (skal være ~-1.0)")
+
+    # Check 3: Retning — høj 12m afkast → positiv vægt
+    print(f"\nCheck 3 — Signalretning:")
+    # Beregn 12m afkast for testdato (window slutter ved t-1)
+    idx = monthly_ret.index.get_loc(test_date)
+    if idx >= 12:
+        cum_ret = monthly_ret.iloc[idx-12:idx].sum()
+        top5_ret = cum_ret.nlargest(5)
+        bot5_ret = cum_ret.nsmallest(5)
+        print(f"  Top 5 industrier (højest 12m afkast) → signal:")
+        for ind in top5_ret.index:
+            if ind in signal.index:
+                print(f"    {ind:20s}: 12m afkast={top5_ret[ind]:+.1f}%,"
+                      f" signal={signal[ind]:+.4f} "
+                      if signal[ind] > 0 else
+                      f"    {ind:20s}: 12m afkast={top5_ret[ind]:+.1f}%,"
+                      f" signal={signal[ind]:+.4f} ")
+        print(f"  Bund 5 industrier (lavest 12m afkast) → signal:")
+        for ind in bot5_ret.index:
+            if ind in signal.index:
+                print(f"    {ind:20s}: 12m afkast={bot5_ret[ind]:+.1f}%,"
+                      f" signal={signal[ind]:+.4f} "
+                      if signal[ind] < 0 else
+                      f"    {ind:20s}: 12m afkast={bot5_ret[ind]:+.1f}%,"
+                      f" signal={signal[ind]:+.4f} ")
+
+    # Check 4: Statistik over hele OOS periode
+    oos = xsmom.loc["2000-01-01":"2024-12-31"]
+    pos_sum = oos.clip(lower=0).sum(axis=1)
+    neg_sum = oos.clip(upper=0).sum(axis=1)
+    print(f"\nCheck 4 — Gennemsnitlig leverage over OOS periode:")
+    print(f"  Gns. sum positive vægte: {pos_sum.mean():.4f}  (skal være ~1.0)")
+    print(f"  Gns. sum negative vægte: {neg_sum.mean():.4f}  (skal være ~-1.0)")
+    print(f"  Gns. sum alle vægte:     "
+          f"{(pos_sum + neg_sum).mean():.6f}  (skal være ~0)")
+
+    # Check 5: Antal aktive industrier per måned
+    n_active = xsmom.notna().sum(axis=1)
+    n_long   = (xsmom > 0).sum(axis=1)
+    n_short  = (xsmom < 0).sum(axis=1)
+    print(f"\nCheck 5 — Aktive industrier (gns. over OOS):")
+    print(f"  Gns. antal industrier i signal: {n_active.mean():.1f}")
+    print(f"  Gns. antal long:  {n_long.mean():.1f}")
+    print(f"  Gns. antal short: {n_short.mean():.1f}")
+
+    print("\n" + "="*55)
+
+
+#Main
 def main():
-    print("\n" + "=" * 80)
-    print("EPO INDUSTRY MOMENTUM — EQUITY 1 (Pedersen, Babu & Levine 2021)")
-    print("=" * 80 + "\n")
+    print("\n" + "=" * 65)
+    print("EPO EQUITY 1  —  Pedersen, Babu & Levine (2021)")
+    print(f"Data:     {DATA_START_DATE} →")
+    print(f"Backtest: {BACKTEST_START_DATE} → {BACKTEST_END_DATE}")
+    print("=" * 65 + "\n")
 
-    # 1. Load data
-    print("Loading data …")
-    industry_file = get_file_path("Select daily industry returns CSV:")
-    rf_file       = get_file_path("Select monthly risk-free rate CSV:")
+    #Data indsamling
+    monthly_ret = get_monthly_return()
+    rf = get_monthly_risk()
 
-    daily_returns = load_and_clean_industry_data(
-        industry_file, DATA_START_DATE, BACKTEST_END_DATE
-    )
-    rf_monthly = load_and_clean_rf_data(
-        rf_file, DATA_START_DATE, BACKTEST_END_DATE
-    )
-    monthly_returns = convert_daily_to_monthly_returns(daily_returns)
-    monthly_excess  = calculate_monthly_excess_returns(monthly_returns, rf_monthly)
+    #månedlig merafkast
+    monthly_excess = calculate_monthly_excess_returns(monthly_ret, rf)
 
-    # XSMOM signal from total monthly returns
-    xsmom_signals = calculate_xsmom_signal(monthly_returns, LOOKBACK_PERIOD_MONTHS)
+    #XSMOM signal  (uses raw % returns for the cumulative sum, then excess returns are only needed for the covariance estimation)
+    xsmom = compute_xsmom(monthly_ret, LOOKBACK_MONTHS)
+    verify_xsmom(xsmom, monthly_ret)
 
-    # 2. Risk models
-    print("\nBuilding 60-month risk model with 5% correlation pre-shrinkage …")
-    corr_shrunk, vols = calculate_monthly_risk_model(
-        monthly_excess,
-        window_months=RISK_WINDOW_MONTHS,
-        corr_preshrink=CORR_PRESHRINK,
-        verbose=True
-    )
-    print(f"  → {len(corr_shrunk)} observations in risk-model cache.\n")
+    #risikomodel
+    print("\nBuilding 60-month rolling risk model (5% pre-shrinkage) …")
+    corr_shrunk, vols = compute_risk_model(
+        monthly_excess, window=RISK_WINDOW, theta=CORR_PRESHRINK, verbose=True)
 
+    # Unshrunk risk model for naive MVO benchmark (θ=0, w=0)
     print("Building unshrunk risk model for MVO benchmark …")
-    corr_raw, vols_raw = calculate_monthly_risk_model_raw(
-        monthly_excess,
-        window_months=RISK_WINDOW_MONTHS,
-        verbose=False
-    )
+    corr_raw, _ = compute_risk_model(
+        monthly_excess, window=RISK_WINDOW, theta=0.0, verbose=False)
 
-    # 3. Period boundaries
-    in_start, in_end   = DATA_START_DATE,     "1941-12-31"
-    oos_start, oos_end = BACKTEST_START_DATE, BACKTEST_END_DATE
-    t0_oos = pd.to_datetime(oos_start)
-    t1_oos = pd.to_datetime(oos_end)
+    #Benchmark
+    print("\nBacktesting benchmarks …")
+    ew_full     = backtest_equal_weight(monthly_excess)
+    indmom_full = backtest_indmom(monthly_excess, xsmom)
+    mvo_full    = backtest_mvo_no_shrink(
+        monthly_excess, xsmom, corr_raw, vols, GAMMA)
 
-    # 4. Benchmarks (OOS window only)
-    print("Backtesting benchmarks …")
-    eqw_oos    = subset(backtest_equal_weight(monthly_excess), oos_start, oos_end)
-    indmom_oos = subset(
-        calculate_indmom_benchmark(monthly_excess, xsmom_signals),
-        oos_start, oos_end
-    )
-
-    corr_raw_oos = {d: v for d, v in corr_raw.items() if t0_oos <= d <= t1_oos}
-    vols_oos     = {d: v for d, v in vols.items()     if t0_oos <= d <= t1_oos}
-    mvo_oos = subset(
-        backtest_mvo_no_shrink(
-            monthly_excess, xsmom_signals, corr_raw_oos, vols_oos, GAMMA
-        ),
-        oos_start, oos_end
-    )
-
-    # 5. EPO panel over the full sample (1927–2018)
-    print("\nBuilding EPO panel for all candidate w values (full sample) …")
+    # EPO for mulige vægte
+    print("\nBuilding EPO panel for all candidate w values …")
     epo_panel = build_epo_panel(
-        monthly_excess, xsmom_signals, corr_shrunk, vols,
-        GAMMA, CANDIDATE_WS
-    )
+        monthly_excess, xsmom, corr_shrunk, vols, GAMMA, CANDIDATE_WS)
+    print(f"  Panel shape: {epo_panel.shape}")
 
-    # 6. In-sample ω* selection (1927–1941)
-    print("\nSelecting omega* from in-sample period (1927–1941) …")
-    epo_panel_in = subset(epo_panel, in_start, in_end)
-    in_sample_sharpes = {}
+    #Dynamisk EPO
+    print("\nBuilding dynamic OOS EPO …")
+    epo_dyn = build_dynamic_oos_epo(
+        epo_panel, oos_start=BACKTEST_START_DATE, min_history=MIN_HISTORY_OOS)
+    print(f"  Dynamic OOS EPO observations: {len(epo_dyn)}")
+
+    # Begrænsning til OOS periode
+    s, e = BACKTEST_START_DATE, BACKTEST_END_DATE
+
+    ew_oos     = subset(ew_full,     s, e)
+    indmom_oos = subset(indmom_full, s, e)
+    mvo_oos    = subset(mvo_full,    s, e)
+    panel_oos  = subset(epo_panel,   s, e)
+    dyn_oos    = subset(epo_dyn,     s, e)
+
+    print(f"\n  Dynamic OOS EPO OOS observations: {len(dyn_oos)}")
+
+    # Performance
+    rows = [
+        performance_summary(ew_oos,     "1/N"),
+        performance_summary(indmom_oos, "INDMOM"),
+        performance_summary(mvo_oos,    "MVO (no shrinkage)"),
+        performance_summary(dyn_oos,    "EPO: out-of-sample"),
+    ]
+
+    w_labels = {
+        0.00: "EPO w=0%  (MVO + 5% pre-shrink)",
+        0.10: "EPO w=10%",
+        0.25: "EPO w=25%",
+        0.50: "EPO w=50%",
+        0.75: "EPO w=75%",
+        0.90: "EPO w=90%",
+        0.99: "EPO w=99%",
+        1.00: "EPO w=100%  (anchor = INDMOM)",
+    }
     for w in CANDIDATE_WS:
         col = f"EPO_w_{w:.2f}"
-        if col not in epo_panel_in.columns:
-            in_sample_sharpes[w] = np.nan
-            continue
-        sr = gross_sharpe(epo_panel_in[col])
-        in_sample_sharpes[w] = sr
-        print(f"  w={w:>4.2f}  in-sample Sharpe = {sr:.3f}")
+        if col in panel_oos.columns:
+            rows.append(performance_summary(panel_oos[col], w_labels[w]))
 
-    w_star = max(in_sample_sharpes, key=lambda x: in_sample_sharpes[x])
-    print(f"\n  Selected omega* = {w_star:.2f}  (in-sample best)\n")
+    perf = pd.DataFrame(rows).set_index("Strategy")
 
-    # 7. OOS EPO strategies
-    epo_panel_oos = subset(epo_panel, oos_start, oos_end)
+    print("\n" + "=" * 65)
+    print(f"PERFORMANCE — OOS: {BACKTEST_START_DATE} → {BACKTEST_END_DATE}")
+    print("=" * 65)
+    print(perf.to_string())
 
-    # (a) Fixed omega* chosen once in-sample
-    epo_star_oos = epo_panel_oos[f"EPO_w_{w_star:.2f}"].rename(
-        f"EPO_w*_{w_star:.2f}"
-    )
-
-    # (b) Dynamic OOS EPO: expanding-window ω selection
-    print("Building dynamic OOS EPO (expanding-window w selection, ≥180 months) …")
-    epo_dyn_oos = build_dynamic_epo(
-        epo_panel, oos_start=oos_start, min_history=MIN_HISTORY_FOR_OOS
-    )
-    epo_dyn_oos = subset(epo_dyn_oos, oos_start, oos_end)
-
-    # 9. Full performance table
-    all_series = {
-        "1/N":                  eqw_oos,
-        "INDMOM":               indmom_oos,
-        "MVO (no corr.)":       mvo_oos,
-        f"EPO_w*_{w_star:.2f}": epo_star_oos,
-        "EPO: out-of-sample":   epo_dyn_oos,
-    }
-
-    # Add selected w grid points matching the paper’s table
-    for w in [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]:
-        col = f"EPO_w_{w:.2f}"
-        if col in epo_panel_oos.columns:
-            all_series[col] = epo_panel_oos[col]
-
-    rows = [calculate_performance_metrics(s, name)
-            for name, s in all_series.items()]
-    perf_df = pd.DataFrame(rows).set_index("Strategy")
-
-    print("\nFull performance summary (1942–2018):")
-    print(perf_df.round(4))
-
-    # 10. Equity 1-style Sharpe table
-    equity1 = perf_df["Sharpe"].rename("Equity 1").to_frame()
-    # Reorder rows to match the paper’s table
-    desired_order = [
+    # Sharpe-ratio summary (Table 5 format)
+    order = [
         "1/N",
         "INDMOM",
-        "MVO (no corr.)",
+        "MVO (no shrinkage)",
         "EPO: out-of-sample",
-        "EPO_w_0.00",
-        "EPO_w_0.10",
-        "EPO_w_0.25",
-        "EPO_w_0.50",
-        "EPO_w_0.75",
-        "EPO_w_0.90",
-        "EPO_w_0.99",
-        "EPO_w_1.00",
+        "EPO w=0%  (MVO + 5% pre-shrink)",
+        "EPO w=10%", "EPO w=25%", "EPO w=50%",
+        "EPO w=75%", "EPO w=90%", "EPO w=99%",
+        "EPO w=100%  (anchor = INDMOM)",
     ]
-    equity1 = equity1.reindex([r for r in desired_order if r in equity1.index])
+    sharpe_tbl = (perf["Sharpe"]
+                  .reindex([r for r in order if r in perf.index])
+                  .rename("Equity 1")
+                  .to_frame())
 
-    print("\nEquity 1-style Sharpe table (paper format):")
-    print(equity1.round(2))
+    print("\nSharpe ratio table (Table 5 format):")
+    print(sharpe_tbl.to_string())
+
+    #Votalitet over perioder
+    print("\nVol over tid:")
+    for year in [1995, 2001, 2006, 2009, 2015, 2021]:
+        date = pd.Timestamp(f"{year}-01-01")
+        avail = [d for d in vols if d >= date]
+        if avail:
+            d = min(avail)
+            v = vols[d]
+            print(f"  {d.strftime('%Y-%m')}: "
+                  f"gns. månedlig vol = {v.mean() * 100:.4f}%, "
+                  f"annualiseret = {v.mean() * np.sqrt(12) * 100:.2f}%")
 
     return {
-        "epo_panel":         epo_panel,
-        "epo_star_oos":      epo_star_oos,
-        "epo_dynamic_oos":   epo_dyn_oos,
-        "in_sample_sharpes": in_sample_sharpes,
-        "w_star":            w_star,
-        "performance":       perf_df,
-        "equity1_table":     equity1,
+        "monthly_excess": monthly_excess,
+        "xsmom":          xsmom,
+        "corr_shrunk":    corr_shrunk,
+        "vols":           vols,
+        "epo_panel":      epo_panel,
+        "epo_dyn_oos":    dyn_oos,
+        "performance":    perf,
+        "sharpe_table":   sharpe_tbl,
     }
+
+
 
 
 if __name__ == "__main__":
