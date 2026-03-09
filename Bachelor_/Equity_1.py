@@ -494,43 +494,40 @@ def verify_xsmom(xsmom: pd.DataFrame, monthly_ret: pd.DataFrame):
     print(f"Antal industrier med signal: {len(signal)}")
 
     # Check 1: Summer til 0 (cross-sectional neutral)
-    print(f"\nCheck 1 — Summer til 0 (CS neutral):")
     print(f"  Sum af alle vægte: {signal.sum():.6f}  (skal være ~0)")
 
     # Check 2: Unit leverage
     pos = signal[signal > 0].sum()
     neg = signal[signal < 0].sum()
-    print(f"\nCheck 2 — Unit leverage:")
     print(f"  Sum positive vægte: {pos:.4f}  (skal være ~1.0)")
     print(f"  Sum negative vægte: {neg:.4f}  (skal være ~-1.0)")
 
     # Check 3: Retning — høj 12m afkast → positiv vægt
-    print(f"\nCheck 3 — Signalretning:")
     # Beregn 12m afkast for testdato (window slutter ved t-1)
     idx = monthly_ret.index.get_loc(test_date)
     if idx >= 12:
         cum_ret = monthly_ret.iloc[idx-12:idx].sum()
         top5_ret = cum_ret.nlargest(5)
         bot5_ret = cum_ret.nsmallest(5)
-        print(f"  Top 5 industrier (højest 12m afkast) → signal:")
+        print(f"  Signalretning for top 5 industrier → bedste afkast sidste 12 måneder:")
         for ind in top5_ret.index:
             if ind in signal.index:
-                print(f"    {ind:20s}: 12m afkast={top5_ret[ind]:+.1f}%,"
+                print(f"    {ind:20s}: 12m afkast = {top5_ret[ind]:+.1f}%,"
                       f" signal={signal[ind]:+.4f} "
                       if signal[ind] > 0 else
-                      f"    {ind:20s}: 12m afkast={top5_ret[ind]:+.1f}%,"
+                      f"    {ind:20s}: 12m afkast = {top5_ret[ind]:+.1f}%,"
                       f" signal={signal[ind]:+.4f} ")
-        print(f"  Bund 5 industrier (lavest 12m afkast) → signal:")
+        print(f"  Signalretning for dårligste 5 industrier → dårligste afkast sidste 12 måneder:")
         for ind in bot5_ret.index:
             if ind in signal.index:
-                print(f"    {ind:20s}: 12m afkast={bot5_ret[ind]:+.1f}%,"
+                print(f"    {ind:20s}: 12m afkast = {bot5_ret[ind]:+.1f}%,"
                       f" signal={signal[ind]:+.4f} "
                       if signal[ind] < 0 else
-                      f"    {ind:20s}: 12m afkast={bot5_ret[ind]:+.1f}%,"
+                      f"    {ind:20s}: 12m afkast = {bot5_ret[ind]:+.1f}%,"
                       f" signal={signal[ind]:+.4f} ")
 
     # Check 4: Statistik over hele OOS periode
-    oos = xsmom.loc["2000-01-01":"2024-12-31"]
+    oos = xsmom.loc["1942-01-01":"2018-12-31"]
     pos_sum = oos.clip(lower=0).sum(axis=1)
     neg_sum = oos.clip(upper=0).sum(axis=1)
     print(f"\nCheck 4 — Gennemsnitlig leverage over OOS periode:")
@@ -659,18 +656,6 @@ def main():
     print("\nSharpe ratio table (Table 5 format):")
     print(sharpe_tbl.to_string())
 
-    #Votalitet over perioder
-    print("\nVol over tid:")
-    for year in [1995, 2001, 2006, 2009, 2015, 2021]:
-        date = pd.Timestamp(f"{year}-01-01")
-        avail = [d for d in vols if d >= date]
-        if avail:
-            d = min(avail)
-            v = vols[d]
-            print(f"  {d.strftime('%Y-%m')}: "
-                  f"gns. månedlig vol = {v.mean() * 100:.4f}%, "
-                  f"annualiseret = {v.mean() * np.sqrt(12) * 100:.2f}%")
-
     return {
         "monthly_excess": monthly_excess,
         "xsmom":          xsmom,
@@ -681,9 +666,6 @@ def main():
         "performance":    perf,
         "sharpe_table":   sharpe_tbl,
     }
-
-
-
 
 if __name__ == "__main__":
     results = main()

@@ -269,6 +269,8 @@ def main():
     rf_monthly = load_and_clean_rf_data(rf_file, START_DATE, END_DATE)
     rf_daily = convert_monthly_rf_to_daily(rf_monthly, df_clean.index)
 
+    print(df_clean.index)
+
     # Beregn afkast
     daglig_merafkast = calculate_excess_returns(df_clean, rf_daily)
     kum_merafkast = calculate_cumulative_returns(daglig_merafkast)
