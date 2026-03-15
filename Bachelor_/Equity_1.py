@@ -16,7 +16,6 @@ Special case:
 Data:
   - Monthly industry returns from Kenneth French 49-industry file
   - Monthly RF from Fama-French factors file
-  - NO daily data used for Equity 1
 """
 
 import numpy as np
@@ -82,52 +81,6 @@ def calculate_monthly_excess_returns(returns_df: pd.DataFrame,
     excess = returns_decimal.subtract(rf_monthly["RF"], axis=0)
     return excess
 
-# Dataindlæsning daglig
-def convert_monthly_rf_to_daily(rf_monthly: pd.DataFrame,
-                                trading_dates: pd.DatetimeIndex) -> pd.DataFrame:
-
-    rf_daily = rf_monthly.reindex(trading_dates, method='ffill')
-    rf_daily["year_month"] = rf_daily.index.to_period("M")
-    trading_days_per_month = rf_daily.groupby("year_month").size()
-    rf_daily["trading_days"] = rf_daily["year_month"].map(trading_days_per_month)
-    rf_daily["RF"] = (1 + rf_daily["RF"]) ** (1 / rf_daily["trading_days"]) - 1
-    rf_daily = rf_daily.drop(columns=["year_month", "trading_days"])
-    return rf_daily
-
-def get_daily_return() -> pd.DataFrame:
-    df = pd.read_csv(
-        "/Users/emilbundesen/Desktop/Bachelor/Data/49_Industry_Portfolios_Daily.csv",
-        sep=",",
-        header=5,
-        low_memory=False
-    )
-
-    midpoint = len(df) // 2
-    df = df.iloc[:midpoint]  # tager kun value-weigthed daglig afkast
-
-    df = df[df[df.columns[0]].astype(str).str.match(r"^\d{8}$", na=False)]  # Behold kun rækker med faktiske datoer
-
-    df = df.rename(columns={df.columns[0]: "Date"})
-    df["Date"] = pd.to_datetime(df["Date"].astype(str), format="%Y%m%d")  # konvertere til date-format
-    df = df.set_index("Date")
-
-    for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")  # konvertere daglig afkast til numerisk
-
-    df.replace(Missing_values, np.nan, inplace=True)  # fjerner missing values
-
-    df = df.sort_index()
-    df_clean = df.loc[DATA_START_DATE:BACKTEST_END_DATE]
-    df_clean = df_clean[~df_clean.index.duplicated(keep='first')]
-
-    return df_clean
-
-def calculate_daily_excess_returns(returns_df: pd.DataFrame,
-                                  rf_daily: pd.DataFrame) -> pd.DataFrame:
-    returns_decimal = returns_df / PERCENT_TO_DECIMAL
-    excess = returns_decimal.subtract(rf_daily["RF"], axis=0)
-    return excess
-
 
 # XSMOM - Signal - (lign. 24–25).
 
@@ -174,33 +127,25 @@ def compute_risk_model(monthly_excess, window=RISK_WINDOW,
     for i in range(window, n_total):
         if verbose and (i - window) % report == 0:
             pct = 100.0 * (i - window) / n_iters
+            print(f"  Risk model: {pct:.1f}%", end="\r", flush=True)
 
         date = idx[i]
         window_data = data[i - window: i]
 
-        # Behold KUN industrier med FULD historik — ingen NaN-imputation
+        # Kræv præcis fuld historik — ingen 90%-fallback, ingen row-fjernelse
         n_obs = np.sum(~np.isnan(window_data), axis=0)
-        valid = n_obs == window  # kræv præcis fuld historik
+        valid = n_obs == window
 
         if valid.sum() < 2:
-            # Fallback: brug industrier med mindst 90% af observationer
-            valid = n_obs >= int(0.9 * window)
-            if valid.sum() < 2:
-                continue
+            continue
 
         W = window_data[:, valid]
         c = cols[valid]
 
-        # Fjern rækker med NaN (de få resterende efter 90% filter)
-        row_complete = ~np.isnan(W).any(axis=1)
-        W = W[row_complete]
+        # W er per konstruktion NaN-fri — ingen row_complete-fjernelse
+        K = W.shape[0]  # altid == window
 
-        if W.shape[0] < 2:
-            continue
-
-        K = W.shape[0]
-
-        # Artiklens kovariansestimator (footnote 17) — ingen imputation
+        # Artiklens kovariansestimator (footnote 17)
         W_dm = W - W.mean(axis=0)
         Sigma_raw = (W_dm.T @ W_dm) / (K - 1)
 
@@ -564,8 +509,8 @@ def main():
     monthly_excess = calculate_monthly_excess_returns(monthly_ret, rf)
 
     #XSMOM signal  (uses raw % returns for the cumulative sum, then excess returns are only needed for the covariance estimation)
-    xsmom = compute_xsmom(monthly_ret, LOOKBACK_MONTHS)
-    verify_xsmom(xsmom, monthly_ret)
+    xsmom = compute_xsmom(monthly_excess, LOOKBACK_MONTHS)
+    verify_xsmom(xsmom, monthly_excess)
 
     #risikomodel
     print("\nBuilding 60-month rolling risk model (5% pre-shrinkage) …")
@@ -574,7 +519,7 @@ def main():
 
     # Unshrunk risk model for naive MVO benchmark (θ=0, w=0)
     print("Building unshrunk risk model for MVO benchmark …")
-    corr_raw, _ = compute_risk_model(
+    corr_raw, vols_raw = compute_risk_model(
         monthly_excess, window=RISK_WINDOW, theta=0.0, verbose=False)
 
     #Benchmark
@@ -582,7 +527,7 @@ def main():
     ew_full     = backtest_equal_weight(monthly_excess)
     indmom_full = backtest_indmom(monthly_excess, xsmom)
     mvo_full    = backtest_mvo_no_shrink(
-        monthly_excess, xsmom, corr_raw, vols, GAMMA)
+        monthly_excess, xsmom, corr_raw, vols_raw, GAMMA)
 
     # EPO for mulige vægte
     print("\nBuilding EPO panel for all candidate w values …")
@@ -623,7 +568,7 @@ def main():
         0.75: "EPO w=75%",
         0.90: "EPO w=90%",
         0.99: "EPO w=99%",
-        1.00: "EPO w=100%  (anchor = INDMOM)",
+        1.00: "EPO w=100%  (anchor)",
     }
     for w in CANDIDATE_WS:
         col = f"EPO_w_{w:.2f}"
@@ -646,7 +591,7 @@ def main():
         "EPO w=0%  (MVO + 5% pre-shrink)",
         "EPO w=10%", "EPO w=25%", "EPO w=50%",
         "EPO w=75%", "EPO w=90%", "EPO w=99%",
-        "EPO w=100%  (anchor = INDMOM)",
+        "EPO w=100%  (anchor)",
     ]
     sharpe_tbl = (perf["Sharpe"]
                   .reindex([r for r in order if r in perf.index])
