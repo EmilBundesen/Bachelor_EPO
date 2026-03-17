@@ -1,8 +1,8 @@
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
 
 from Equity_1 import (
     compute_risk_model,
@@ -20,6 +20,8 @@ from Equity_1 import (
     backtest_strategy,
     epo_weights,
 )
+
+from Get_stock_data import DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR_PATH
 
 # ── Konfiguration ─────────────────────────────────────────────
 sectors = {
@@ -48,6 +50,26 @@ N_LONG_SHORT      = 5
 
 
 # ── Datahentning ──────────────────────────────────────────────
+def load_data():
+    """
+    Indlæser gemt datasæt fra Data_Fetch.py.
+    Kør Data_Fetch.py først hvis filerne ikke findes.
+    """
+    if not all(os.path.exists(p) for p in
+               [DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR_PATH]):
+        raise FileNotFoundError(
+            "Data ikke fundet — kør Data_Fetch.py først."
+        )
+
+    daily        = pd.read_parquet(DAILY_RETS_PATH)
+    daily_prices = pd.read_parquet(DAILY_PRICES_PATH)
+    sec_df       = pd.read_csv(SECTOR_PATH)
+    ticker_to_sector = dict(zip(sec_df["ticker"], sec_df["sector"]))
+
+    print(f"Data indlæst: {daily.shape[1]} aktier  |  "
+          f"{daily.index[0].date()} → {daily.index[-1].date()}")
+
+    return daily, daily_prices, ticker_to_sector
 
 def get_rf_monthly(start: str, end: str) -> pd.Series:
     rf_df = get_monthly_risk()
@@ -55,31 +77,6 @@ def get_rf_monthly(start: str, end: str) -> pd.Series:
     rf = rf_df["RF"].loc[start:end].dropna()
     rf.name = "RF"
     return rf
-
-
-def get_stock_returns(sectors, start, end, max_nan=MAX_NAN_THRESHOLD):
-    all_returns, all_prices, ticker_to_sector = [], [], {}
-    for sector, tickers in sectors.items():
-        print(f"Henter {sector}...")
-        data = yf.download(tickers, start=start, end=end,
-                           auto_adjust=True, threads=False,
-                           progress=True)["Close"]
-        if isinstance(data, pd.Series):
-            data = data.to_frame(name=tickers[0])
-        rets = data.pct_change(fill_method=None)
-        valid = rets.columns[rets.isna().mean() <= max_nan].tolist()
-        rets  = rets[valid]
-        data  = data[valid]
-        for t in valid:
-            ticker_to_sector[t] = sector
-        all_returns.append(rets)
-        all_prices.append(data)          # ← gem råpriser separat
-
-    daily_rets   = pd.concat(all_returns, axis=1)
-    daily_prices = pd.concat(all_prices,  axis=1)
-    daily_rets.index   = pd.to_datetime(daily_rets.index)
-    daily_prices.index = pd.to_datetime(daily_prices.index)
-    return daily_rets, daily_prices, ticker_to_sector
 
 
 def to_monthly_returns(daily: pd.DataFrame) -> pd.DataFrame:
@@ -333,10 +330,9 @@ def main():
     print("=" * 65)
 
     # 1. Data
-    daily, daily_prices, ticker_to_sector = get_stock_returns(
-        sectors, START_DATE, END_DATE)
-    monthly        = to_monthly_returns(daily)
-    rf             = get_rf_monthly(START_DATE, END_DATE)
+    daily, daily_prices, ticker_to_sector = load_data()
+    monthly = to_monthly_returns(daily)
+    rf = get_rf_monthly(START_DATE, END_DATE)
     monthly_excess = compute_monthly_excess(monthly, rf)
     print(f"\nAktier: {monthly_excess.shape[1]}  |  "
           f"Periode: {monthly_excess.index[0].date()} → "
