@@ -11,7 +11,7 @@ MISSING_VALUES     = [-99.99, -999]
 PERCENT_TO_DECIMAL = 100
 LOOKBACK_MONTHS    = 12
 TOP_N_VOLATILE     = 10
-VOL_WINDOW         = 6  # måneder til rullende volatilitet
+VOL_WINDOW         = 12  # måneder til rullende volatilitet
 
 
 # ── Datahentning ──────────────────────────────────────────────────────────────
