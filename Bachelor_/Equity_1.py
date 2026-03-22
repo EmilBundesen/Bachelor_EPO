@@ -1,8 +1,4 @@
 """
-EPO Industry Momentum — Equity 1
-Pedersen, Babu & Levine (2021), Table 1 / Table 5
-
-Equity 1 spec (Table 1):
   - Signal      : XSMOM (Eq. 24–25), 12-month lookback
   - Risk model  : 60-month equal-weighted rolling window on MONTHLY returns
                   5% pre-shrinkage of correlation toward identity  (Eq. 10)
@@ -83,7 +79,6 @@ def calculate_monthly_excess_returns(returns_df: pd.DataFrame,
 
 
 # XSMOM - Signal - (lign. 24–25).
-
 def compute_xsmom(monthly_ret: pd.DataFrame,
                   lookback: int = LOOKBACK_MONTHS) -> pd.DataFrame:
     roll = (monthly_ret

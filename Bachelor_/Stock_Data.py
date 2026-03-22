@@ -320,6 +320,81 @@ def plot_visualizations(monthly_excess, daily, ticker_to_sector,
     plt.show()
 
 
+# ── Gross Exposure ────────────────────────────────────────────
+
+def compute_ge_epo_fixed_w(monthly_excess, xsmom, corr_dict, vols_dict,
+                            gamma, w, start, end):
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    idx = monthly_excess.loc[s:e].index
+    risk_dates = set(corr_dict)
+    sig_dates  = set(xsmom.index)
+    ge, dates  = [], []
+    for date in idx:
+        if date not in risk_dates or date not in sig_dates:
+            continue
+        wts = epo_weights(xsmom.loc[date], corr_dict[date],
+                          vols_dict[date], gamma, w)
+        if len(wts) == 0:
+            continue
+        ge.append(wts.abs().sum())
+        dates.append(date)
+    return pd.Series(ge, index=dates)
+
+
+def compute_ge_indmom(monthly_excess, xsmom, vols_dict, start, end):
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    idx = monthly_excess.loc[s:e].index
+    risk_dates = set(vols_dict)
+    sig_dates  = set(xsmom.index)
+    ge, dates  = [], []
+    for date in idx:
+        if date not in risk_dates or date not in sig_dates:
+            continue
+        sig = xsmom.loc[date].dropna()
+        v   = vols_dict[date].reindex(sig.index).dropna()
+        common = sig.reindex(v.index).dropna()
+        v = v.reindex(common.index)
+        raw_w = common / (v ** 2)
+        pos = raw_w[raw_w > 0].sum()
+        neg = raw_w[raw_w < 0].sum()
+        if pos == 0 or neg == 0:
+            continue
+        wts = raw_w / max(pos, abs(neg))
+        ge.append(wts.abs().sum())
+        dates.append(date)
+    return pd.Series(ge, index=dates)
+
+
+def print_leverage_table(monthly_excess, xsmom, corr_shrunk, vols,
+                          corr_raw, vols_raw, gamma, backtest_start, end_date):
+    s, e = backtest_start, end_date
+    rows = []
+
+    # OOS Eq1 (anchor)
+    ge = compute_ge_indmom(monthly_excess, xsmom, vols, s, e)
+    rows.append({"Strategi": "OOS Eq1 (anchor)", "Gns. GE": ge.mean() * 100})
+
+    # Std MVO
+    ge = compute_ge_epo_fixed_w(monthly_excess, xsmom, corr_raw, vols_raw,
+                                  gamma, w=0.0, start=s, end=e)
+    rows.append({"Strategi": "Std MVO", "Gns. GE": ge.mean() * 100})
+
+    # EPO alle w-værdier
+    for w in CANDIDATE_WS:
+        ge = compute_ge_epo_fixed_w(monthly_excess, xsmom, corr_shrunk, vols,
+                                     gamma, w=w, start=s, end=e)
+        rows.append({"Strategi": f"EPO w={int(round(w*100))}%",
+                     "Gns. GE": ge.mean() * 100})
+
+    print("\n" + "=" * 45)
+    print(f"GEARING — OOS: {backtest_start} → {end_date}")
+    print("=" * 45)
+    print(f"{'Strategi':<35} {'Gns. GE':>8}")
+    print("-" * 45)
+    for row in rows:
+        print(f"{row['Strategi']:<35} {row['Gns. GE']:>7.0f}%")
+    print("=" * 45)
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -407,6 +482,19 @@ def main():
     # 7. Terminal statistik
     print_top_bottom_stocks(monthly_excess, ticker_to_sector, END_DATE)
     print_top_bottom_correlations(daily_prices, ticker_to_sector, n=10)
+
+    # 7b. Leverage tabel
+    print_leverage_table(
+        monthly_excess=monthly_excess,
+        xsmom=xsmom,
+        corr_shrunk=corr_shrunk,
+        vols=vols,
+        corr_raw=corr_raw,
+        vols_raw=vols_raw,
+        gamma=GAMMA,
+        backtest_start=BACKTEST_START,
+        end_date=END_DATE,
+    )
 
     # 8. Visualiseringer
     print("\nGenererer visualiseringer...")
