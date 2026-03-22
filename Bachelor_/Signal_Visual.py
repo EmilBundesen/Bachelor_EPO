@@ -13,6 +13,7 @@ LOOKBACK_MONTHS    = 12
 TOP_N_VOLATILE     = 10
 VOL_WINDOW         = 12  # måneder til rullende volatilitet
 
+from Equity_1 import compute_risk_model, GAMMA, RISK_WINDOW, CORR_PRESHRINK
 
 # ── Datahentning ──────────────────────────────────────────────────────────────
 def get_monthly_return() -> pd.DataFrame:
@@ -180,6 +181,103 @@ def plot_signal(xsmom_signal: pd.DataFrame,
     plt.show()
 
 
+# Beregn og plot turnover
+# ── Turnover ──────────────────────────────────────────────────────────────────
+
+def compute_turnover_series(monthly_excess, xsmom, corr_dict, vols_dict,
+                             gamma, w, start, end):
+    """
+    Beregner månedlig turnover = 0.5 * sum(|w_t - w_{t-1}|) for en given EPO-strategi.
+    """
+    from Equity_1 import epo_weights
+
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    idx  = monthly_excess.loc[s:e].index
+    risk_dates = set(corr_dict)
+    sig_dates  = set(xsmom.index)
+
+    prev_wts = None
+    turnover, dates = [], []
+
+    for date in idx:
+        if date not in risk_dates or date not in sig_dates:
+            prev_wts = None
+            continue
+
+        wts = epo_weights(xsmom.loc[date], corr_dict[date],
+                          vols_dict[date], gamma, w)
+        if len(wts) == 0:
+            prev_wts = None
+            continue
+
+        if prev_wts is not None:
+            # Align på fælles aktiver
+            all_tickers = wts.index.union(prev_wts.index)
+            w_cur  = wts.reindex(all_tickers).fillna(0.0)
+            w_prev = prev_wts.reindex(all_tickers).fillna(0.0)
+            to = 0.5 * (w_cur - w_prev).abs().sum()
+            turnover.append(to)
+            dates.append(date)
+
+        prev_wts = wts
+
+    return pd.Series(turnover, index=dates)
+
+
+def plot_turnover(monthly_excess, xsmom, corr_shrunk, vols,
+                  corr_raw, vols_raw, gamma,
+                  backtest_start, end_date,
+                  roll_window=12):
+    """
+    Tidsserieplot af rullende gennemsnitlig turnover for udvalgte strategier.
+    """
+    strategies = {
+        "Std MVO":     (corr_raw,    vols_raw, 0.00),
+        "EPO w=0%":    (corr_shrunk, vols,     0.00),
+        "EPO w=25%":   (corr_shrunk, vols,     0.25),
+        "EPO w=75%":   (corr_shrunk, vols,     0.75),
+        "EPO w=100%":  (corr_shrunk, vols,     1.00),
+    }
+
+    colors = {
+        "Std MVO":    "black",
+        "EPO w=0%":   "#d62728",
+        "EPO w=25%":  "#ff7f0e",
+        "EPO w=75%":  "#2ca02c",
+        "EPO w=100%": "#1f77b4",
+    }
+
+    fig, ax = plt.subplots(figsize=(16, 6))
+
+    for label, (corr_d, vol_d, w) in strategies.items():
+        print(f"  Beregner turnover: {label} …", flush=True)
+        to_series = compute_turnover_series(
+            monthly_excess, xsmom, corr_d, vol_d,
+            gamma, w, backtest_start, end_date
+        )
+        # Rullende gennemsnit
+        rolling_to = to_series.rolling(window=roll_window,
+                                        min_periods=roll_window).mean()
+        ax.plot(rolling_to.index, rolling_to * 100,
+                label=label, color=colors[label], linewidth=1.5)
+
+    ax.set_title(
+        f"Rullende {roll_window}-måneders gennemsnitlig turnover\n"
+        f"OOS: {backtest_start} → {end_date}",
+        fontsize=13, pad=12
+    )
+    ax.set_ylabel("Månedlig turnover (%, rullende gns.)", fontsize=11)
+    ax.set_xlabel("Dato", fontsize=11)
+    ax.legend(fontsize=10, framealpha=0.8)
+    _style_time_axis(ax)
+
+    plt.tight_layout()
+    plt.savefig(
+        "/Users/emilbundesen/Desktop/Bachelor/Turnover_EPO.png",
+        dpi=150, bbox_inches="tight"
+    )
+    plt.show()
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     monthly_ret    = get_monthly_return()
@@ -194,6 +292,27 @@ def main():
 
     # Plot 2: XS-momentum signal
     plot_signal(xsmom, top_volatile)
+
+    print("\nBygger risikomodel til turnover-beregning...")
+    corr_shrunk, vols = compute_risk_model(
+        monthly_excess, window=RISK_WINDOW, theta=CORR_PRESHRINK, verbose=True)
+    corr_raw, vols_raw = compute_risk_model(
+        monthly_excess, window=RISK_WINDOW, theta=0.0, verbose=False)
+
+    # Plot 3: Turnover
+    print("\nBeregner og plotter turnover...")
+    plot_turnover(
+        monthly_excess=monthly_excess,
+        xsmom=xsmom,
+        corr_shrunk=corr_shrunk,
+        vols=vols,
+        corr_raw=corr_raw,
+        vols_raw=vols_raw,
+        gamma=GAMMA,
+        backtest_start="1990-01-01",
+        end_date=END_DATE,
+        roll_window=12,
+    )
 
 if __name__ == "__main__":
     main()

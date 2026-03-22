@@ -26,10 +26,10 @@ LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
 RISK_WINDOW      = 60    # Rolling window for covariance estimation (months)
 CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
 GAMMA            = 3     # Risk aversion γ (cancels in Sharpe ratio)
-MIN_VOL          = 1e-6  # Floor on vol to avoid division by zero
+MIN_VOL          = 1e-8  # Floor on vol to avoid division by zero
 
 CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
-MIN_HISTORY_OOS  = 12 #15 år
+MIN_HISTORY_OOS  = 12
 PERCENT_TO_DECIMAL   = 100.0
 Missing_values = [-99.99, -999]
 
@@ -175,7 +175,6 @@ def compute_risk_model(monthly_excess, window=RISK_WINDOW,
 
 
 #EPO vægte (lign. 19 og 20)
-
 def epo_weights(signal:  pd.Series,
                 corr:    pd.DataFrame,
                 vols:    pd.Series,
@@ -339,7 +338,6 @@ def build_dynamic_oos_epo(panel: pd.DataFrame,
     panel = panel.sort_index().dropna(how="all")
     t0 = pd.to_datetime(oos_start)
 
-    # Find første dato hvor vi har min_history måneder af historik
     # og datoen er >= oos_start
     rets, dates = [], []
 
