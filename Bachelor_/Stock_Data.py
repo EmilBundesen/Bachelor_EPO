@@ -19,34 +19,21 @@ from Equity_1 import (
     MIN_HISTORY_OOS,
     backtest_strategy,
     epo_weights,
+    get_weights_at_date
 )
 
 from Get_stock_data import DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR_PATH
 
-# ── Konfiguration ─────────────────────────────────────────────
-sectors = {
-    "pharma":   ["PFE","MRK","BMY","JNJ","AMGN","ABT","BAX","LLY",
-                 "GILD","MDT","CAH","MCK","CI","UNH","BDX",
-                 "SYK","ZBH","HUM","DVA","WST"],
-    "defense":  ["LMT","NOC","RTX","GD","BA","TXT","LHX","HII",
-                 "CW","TDG","HEI","BWXT","LDOS","SAIC","CACI",
-                 "HON","GE","MMM","EMR","ETN"],
-    "energy":   ["XOM","CVX","COP","EOG","OXY","DVN","APA","SLB",
-                 "HAL","BKR","KMI","WMB","OKE","PSX","VLO",
-                 "MPC","SUN","FANG"],
-    "tech":     ["MSFT","INTC","IBM","ORCL","CSCO","QCOM","TXN","ADI",
-                 "AMAT","LRCX","KLAC","HPQ","ADBE","SAP","ACN",
-                 "MU","NXPI","AVGO","CRM","DELL"],
-    "consumer": ["KO","PEP","PG","CL","KMB","GIS","MDLZ","UL",
-                 "PM","MO","BTI","DEO","BUD","STZ","BF-B",
-                 "HRL","CPB","SJM","HSY","MKC"],
-}
+from Signal_Visual import (
+    plot_turnover,
+    compute_turnover_series
+)
 
-START_DATE        = "1990-01-01"
+START_DATE        = "2015-01-01"
 END_DATE          = "2025-12-31"
-BACKTEST_START    = "2000-01-01"
+BACKTEST_START    = "2020-01-01"
 MAX_NAN_THRESHOLD = 0.20
-N_LONG_SHORT      = 5
+N_LONG_SHORT      = 20
 
 
 # ── Datahentning ──────────────────────────────────────────────
@@ -87,7 +74,6 @@ def to_monthly_returns(daily: pd.DataFrame) -> pd.DataFrame:
 
 def compute_monthly_excess(monthly, rf):
     return monthly.sub(rf.reindex(monthly.index).ffill(), axis=0)
-
 
 def subset(df, start, end):
     s, e = pd.to_datetime(start), pd.to_datetime(end)
@@ -133,6 +119,39 @@ def compute_combined_signal(monthly_ret, ticker_to_sector,
 
     return out
 
+def compute_tsmom_signal(monthly_ret, ticker_to_sector,
+                          lookback=LOOKBACK_MONTHS):
+    """
+    TSMOM per aktie med asymmetrisk short-filter:
+      - Long:  12m afkast > 0  → signal = +afkast / n
+      - Short: 12m afkast < 0  → signal = +afkast / n  (negativt tal)
+      - Nul:   12m afkast = 0  → ingen position
+
+    Short-siden aktiveres KUN hvis aktien har negativt absolut afkast
+    — ikke blot relativt dårlig inden for universet.
+    Dermed shortes der ikke aktier der blot stiger langsommere end andre.
+    """
+    roll = monthly_ret.rolling(window=lookback, min_periods=lookback).sum()
+    out  = pd.DataFrame(np.nan, index=roll.index, columns=roll.columns)
+
+    for date, row in roll.iterrows():
+        avail = row.dropna()
+        if len(avail) < 2:
+            continue
+
+        # Long: positivt 12m afkast
+        long_mask  = avail > 0
+        # Short: negativt absolut 12m afkast (aktien har rent faktisk tabt)
+        short_mask = avail < 0
+
+        signal = pd.Series(0.0, index=avail.index)
+        signal[long_mask]  =  avail[long_mask]   # positiv vægt
+        signal[short_mask] =  avail[short_mask]  # negativ vægt (afkast er < 0)
+
+        n = len(avail)
+        out.loc[date, signal.index] = signal.values / n
+
+    return out
 
 # ── Benchmarks ────────────────────────────────────────────────
 
@@ -160,12 +179,46 @@ def backtest_vol_scaled(monthly_excess, xsmom, vols_dict):
 
 
 def backtest_simple_momentum(monthly_excess, monthly_ret,
-                              n=N_LONG_SHORT, lookback=LOOKBACK_MONTHS):
-    """
-    Simpel momentum: køb de n aktier med højest 12m råafkast,
-    sælg de n med lavest. Equal-weighted, unit-leverage.
-    """
-    roll = monthly_ret.rolling(window=lookback, min_periods=lookback).sum()
+                             n=N_LONG_SHORT, lookback=LOOKBACK_MONTHS):
+
+    roll = (1 + monthly_ret).rolling(lookback).apply(np.prod, raw=True) - 1
+
+    idx  = monthly_excess.index
+    rets, dates = [], []
+
+    for t in range(len(idx) - 1):
+        date      = idx[t]
+        next_date = idx[t + 1]
+
+        momentum = roll.loc[date].dropna()
+        if len(momentum) < n * 2:
+            continue
+
+        long = momentum.nlargest(n)
+        short = momentum.nsmallest(n)
+
+        r = monthly_excess.loc[next_date]
+
+        weights = pd.Series(0.0, index=r.index)
+        weights[long.index]  =  1.0 / n
+        weights[short.index] = -1.0 / n
+
+        aligned = pd.concat([weights, r], axis=1).dropna()
+        if aligned.empty:
+            continue
+
+        ret = (aligned.iloc[:, 0] * aligned.iloc[:, 1]).sum()
+
+        rets.append(ret)
+        dates.append(next_date)
+
+    return pd.Series(rets, index=dates,
+                     name=f"Simple Momentum (L{n}/S{n})")
+
+def backtest_simple_momentum_ew(monthly_excess, monthly_ret,
+                               lookback=LOOKBACK_MONTHS):
+
+    roll = (1 + monthly_ret).rolling(lookback).apply(np.prod, raw=True) - 1
     idx  = monthly_excess.index
     rets, dates = [], []
 
@@ -173,20 +226,61 @@ def backtest_simple_momentum(monthly_excess, monthly_ret,
         date      = idx[t]
         next_date = idx[t + 1]
         momentum  = roll.loc[date].dropna()
-        if len(momentum) < n * 2:
+
+        long_tickers  = momentum[momentum > 0].index
+        short_tickers = momentum[momentum < 0].index
+
+        if len(long_tickers) == 0 and len(short_tickers) == 0:
             continue
-        long_tickers  = momentum.nlargest(n).index
-        short_tickers = momentum.nsmallest(n).index
-        r_long  = monthly_excess.loc[next_date, long_tickers].dropna()
-        r_short = monthly_excess.loc[next_date, short_tickers].dropna()
-        if len(r_long) == 0 or len(r_short) == 0:
+
+        r = monthly_excess.loc[next_date]
+
+        weights = pd.Series(0.0, index=r.index)
+
+        if len(long_tickers) > 0:
+            weights[long_tickers] = 1.0 / len(long_tickers)
+
+        if len(short_tickers) > 0:
+            weights[short_tickers] = -1.0 / len(short_tickers)
+
+        # 🔥 NORMALISÉR TIL UNIT LEVERAGE
+        weights = weights / weights.abs().sum()
+
+        aligned = pd.concat([weights, r], axis=1).dropna()
+        if aligned.empty:
             continue
-        rets.append(r_long.mean() - r_short.mean())
+
+        ret = (aligned.iloc[:, 0] * aligned.iloc[:, 1]).sum()
+
+        rets.append(ret)
         dates.append(next_date)
 
-    return pd.Series(rets, index=dates,
-                     name=f"Simple Momentum (L{n}/S{n})")
+    return pd.Series(rets, index=dates, name="TSMOM EW (fixed)")
 
+def compute_equal_weight_benchmark(monthly_excess):
+    """
+    1/N benchmark:
+    - Lige vægt i alle tilgængelige aktier hver måned
+    - Rebalanceres månedligt
+    """
+
+    rets = []
+    dates = []
+
+    for date in monthly_excess.index:
+        r = monthly_excess.loc[date].dropna()
+
+        if len(r) == 0:
+            continue
+
+        weights = pd.Series(1.0 / len(r), index=r.index)
+
+        port_ret = (weights * r).sum()
+
+        rets.append(port_ret)
+        dates.append(date)
+
+    return pd.Series(rets, index=dates, name="Equal Weight (1/N)")
 
 # ── Terminal output ───────────────────────────────────────────
 
@@ -395,6 +489,214 @@ def print_leverage_table(monthly_excess, xsmom, corr_shrunk, vols,
         print(f"{row['Strategi']:<35} {row['Gns. GE']:>7.0f}%")
     print("=" * 45)
 
+# EPO vægte over tid
+def plot_epo_weights_over_time(monthly_excess, xsmom, corr_shrunk, vols,
+                                gamma, w=0.75, start="2025-01-01",
+                                end="2025-12-31", top_n=10):
+    """
+    Beregner EPO-vægte (w=0.75) for hver måned i perioden og viser
+    de top_n long- og top_n short-positioner som linjediagrammer over tid.
+    """
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    dates = [d for d in monthly_excess.index if s <= d <= e]
+
+    # ── Byg vægtmatrix måned for måned ───────────────────────
+    weight_records = {}
+    for date in dates:
+        # Signal og risikomodel bruger foregående måneds data
+        valid_signal = monthly_excess.index[monthly_excess.index < date]
+        if len(valid_signal) == 0:
+            continue
+        sig_date = valid_signal[-1]
+
+        if sig_date not in xsmom.index:
+            continue
+        if sig_date not in corr_shrunk:
+            continue
+
+        wts = epo_weights(
+            signal=xsmom.loc[sig_date],
+            corr=corr_shrunk[sig_date],
+            vols=vols[sig_date],
+            gamma=gamma,
+            w=w
+        )
+        if len(wts) > 0:
+            weight_records[date] = wts
+
+    if not weight_records:
+        print("Ingen vægte beregnet — tjek at data dækker perioden.")
+        return
+
+    weights_df = pd.DataFrame(weight_records).T.fillna(0)
+
+    # ── Identificer top_n long og top_n short på tværs af 2025 ──
+    mean_wts   = weights_df.mean()
+    top_long   = mean_wts.nlargest(top_n).index
+    top_short  = mean_wts.nsmallest(top_n).index
+
+    # ── Plot ──────────────────────────────────────────────────
+    sns.set_theme(style="whitegrid", palette="tab10")
+    fig, axes = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+    # Long-positioner
+    ax = axes[0]
+    for ticker in top_long:
+        ax.plot(weights_df.index, weights_df[ticker] * 100,
+                marker="o", markersize=4, linewidth=1.8, label=ticker)
+    ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
+    ax.set_title(f"Top {top_n} long-positioner — EPO w={w} (2025)",
+                 fontsize=12, fontweight="bold")
+    ax.set_ylabel("Vægt (%)")
+    ax.legend(fontsize=8, ncol=2, loc="upper right")
+
+    # Short-positioner
+    ax = axes[1]
+    for ticker in top_short:
+        ax.plot(weights_df.index, weights_df[ticker] * 100,
+                marker="o", markersize=4, linewidth=1.8, label=ticker)
+    ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
+    ax.set_title(f"Top {top_n} short-positioner — EPO w={w} (2025)",
+                 fontsize=12, fontweight="bold")
+    ax.set_ylabel("Vægt (%)")
+    ax.set_xlabel("Måned")
+    ax.legend(fontsize=8, ncol=2, loc="lower right")
+
+    plt.xticks(weights_df.index,
+               [d.strftime("%Y-%m") for d in weights_df.index],
+               rotation=45, ha="right")
+    plt.suptitle(f"EPO porteføljervægte over tid (w={w})",
+                 fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+    return weights_df
+
+def backtest_buy_and_hold_2025(monthly_excess, xsmom, corr_shrunk, vols,
+                                gamma, w=0.75,
+                                signal_date="2024-12-31",
+                                start="2025-01-01",
+                                end="2025-12-31"):
+    """
+    Buy-and-hold 2025: vægte fryses ved signal_date og rebalanceres ikke.
+    Afkastet beregnes ved at holde samme vægte hele året.
+    """
+    # Find nærmeste tilgængelige signal-dato
+    sig_date = monthly_excess.index[
+        monthly_excess.index <= pd.to_datetime(signal_date)
+    ][-1]
+
+    # Beregn EPO-vægte én gang
+    wts = epo_weights(
+        signal=xsmom.loc[sig_date],
+        corr=corr_shrunk[sig_date],
+        vols=vols[sig_date],
+        gamma=gamma,
+        w=w
+    )
+    if len(wts) == 0:
+        raise ValueError("Ingen vægte beregnet — tjek signal og risikomodel.")
+
+    print(f"\n  Signal-dato:        {sig_date.strftime('%Y-%m')}")
+    print(f"  Antal long:         {(wts > 0).sum()}")
+    print(f"  Antal short:        {(wts < 0).sum()}")
+    print(f"  Brutto-eksponering: {wts.abs().sum():.2%}")
+
+    # Buy-and-hold: samme vægte hver måned
+    period = monthly_excess.loc[start:end]
+    rets, dates = [], []
+
+    for date, row in period.iterrows():
+        r     = row.reindex(wts.index).dropna()
+        w_aln = wts.reindex(r.index).dropna()
+        if len(w_aln) == 0:
+            continue
+        rets.append((w_aln * r.reindex(w_aln.index)).sum())
+        dates.append(date)
+
+    s = pd.Series(rets, index=dates, name=f"Buy-and-Hold EPO w={w} (2025)")
+    return s
+
+# leverage
+def backtest_leveraged_buy_and_hold_2025(monthly_excess, xsmom, corr_shrunk, vols,
+                                          gamma, w=0.75,
+                                          signal_date="2024-12-31",
+                                          start="2025-01-01",
+                                          end="2025-12-31",
+                                          target_leverage=1.0):
+    """
+    Beregner buy-and-hold med leverage-skalerede vægte og sammenligner
+    med den uskalerede buy-and-hold.
+    target_leverage: ønsket brutto-eksponering (f.eks. 1.47 = anchor niveau)
+    """
+    sig_date = monthly_excess.index[
+        monthly_excess.index <= pd.to_datetime(signal_date)
+    ][-1]
+
+    wts = epo_weights(
+        signal=xsmom.loc[sig_date],
+        corr=corr_shrunk[sig_date],
+        vols=vols[sig_date],
+        gamma=gamma,
+        w=w
+    )
+    if len(wts) == 0:
+        raise ValueError("Ingen vægte beregnet.")
+
+    # Uskalerede vægte (original buy-and-hold)
+    period = monthly_excess.loc[start:end]
+    rets_unscaled, rets_scaled, dates = [], [], []
+
+    # Skalér vægte til target leverage
+    current_ge = wts.abs().sum()
+    scaled_wts = wts * (target_leverage / current_ge)
+
+    for date, row in period.iterrows():
+        r = row.reindex(wts.index).dropna()
+
+        # Uskaleret
+        w_aln = wts.reindex(r.index).dropna()
+        if len(w_aln) > 0:
+            rets_unscaled.append((w_aln * r.reindex(w_aln.index)).sum())
+
+        # Skaleret
+        w_scl = scaled_wts.reindex(r.index).dropna()
+        if len(w_scl) > 0:
+            rets_scaled.append((w_scl * r.reindex(w_scl.index)).sum())
+
+        dates.append(date)
+
+    bah_unscaled = pd.Series(rets_unscaled, index=dates,
+                              name=f"Buy-and-Hold EPO w={w}")
+    bah_scaled   = pd.Series(rets_scaled,   index=dates,
+                              name=f"Leveraged BaH (GE={target_leverage:.0%})")
+
+    # Print sammenligning
+    print("\n" + "=" * 65)
+    print(f"BUY-AND-HOLD: USKALERET vs. LEVERAGE-SKALERET (GE={target_leverage:.0%}) — 2025")
+    print("=" * 65)
+    print(f"  {'Måned':<10} {'Uskaleret':>14} {f'Skaleret ({target_leverage:.0%} GE)':>20}")
+    print("-" * 65)
+    for date in dates:
+        u = bah_unscaled.loc[date]
+        s = bah_scaled.loc[date]
+        print(f"  {date.strftime('%Y-%m'):<10} {u:>13.2%} {s:>19.2%}")
+
+    cum_u = (1 + bah_unscaled).prod() - 1
+    cum_s = (1 + bah_scaled).prod() - 1
+    print("-" * 65)
+    print(f"  {'Kumuleret':<10} {cum_u:>13.2%} {cum_s:>19.2%}")
+    print("=" * 65)
+
+    perf_u = performance_summary(bah_unscaled, f"Buy-and-Hold EPO w={w}")
+    perf_s = performance_summary(bah_scaled,   f"Leveraged BaH (GE={target_leverage:.0%})")
+    perf_df = pd.DataFrame([perf_u, perf_s]).set_index("Strategy")[
+        ["Ann. Return", "Ann. Vol", "Sharpe"]
+    ]
+    print(perf_df.to_string(float_format=lambda x: f"{x:.4f}"))
+
+    return bah_unscaled, bah_scaled
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -415,8 +717,7 @@ def main():
 
     # 2. Signal
     print("\nBeregner signal...")
-    xsmom = compute_combined_signal(monthly_excess, ticker_to_sector,
-                                    LOOKBACK_MONTHS)
+    xsmom = compute_tsmom_signal(monthly_excess, ticker_to_sector, LOOKBACK_MONTHS)
 
     # 3. Risikomodel
     print("\nBygger risikomodel (60m, 5% pre-shrinkage)...")
@@ -435,6 +736,8 @@ def main():
         monthly_excess, xsmom, corr_raw, vols_raw, GAMMA)
     mom_full    = backtest_simple_momentum(monthly_excess, monthly,
                                            n=N_LONG_SHORT)
+    mom_ew_full = backtest_simple_momentum_ew(monthly_excess, monthly)
+    én_over_N = compute_equal_weight_benchmark(monthly_excess)
 
     # 5. EPO
     print("\nBygger EPO panel...")
@@ -455,6 +758,8 @@ def main():
                             f"Simple Momentum (L{N_LONG_SHORT}/S{N_LONG_SHORT})"),
         performance_summary(subset(epo_dyn,     s, e),
                             "EPO: out-of-sample"),
+        performance_summary(subset(mom_ew_full, s, e), "TSMOM EW (hele univers)"),
+        performance_summary(subset(én_over_N, s, e), "1/N"),
     ]
     w_labels = {
         0.00: "EPO w=0%   (MVO + 5% pre-shrink)",
@@ -479,6 +784,42 @@ def main():
     perf.to_csv("performance_summary.csv")
     print("\nGemt: performance_summary.csv")
 
+    # ── Buy-and-hold vs. månedlig rebalancering 2025 ─────────────
+    bah_2025 = backtest_buy_and_hold_2025(
+        monthly_excess=monthly_excess,
+        xsmom=xsmom,
+        corr_shrunk=corr_shrunk,
+        vols=vols,
+        gamma=GAMMA,
+        w=0.75
+    )
+
+    epo_75_2025 = subset(epo_panel["EPO_w_0.75"], "2025-01-01", "2025-12-31")
+
+    print("\n" + "=" * 60)
+    print("BUY-AND-HOLD vs. MÅNEDLIG REBALANCERING — 2025")
+    print("=" * 60)
+    sammenligning = pd.DataFrame([
+        performance_summary(bah_2025, "Buy-and-Hold EPO w=0.75"),
+        performance_summary(epo_75_2025, "Månedlig rebalancering EPO w=0.75"),
+    ]).set_index("Strategy")[["Ann. Return", "Ann. Vol", "Sharpe"]]
+    print(sammenligning.to_string(float_format=lambda x: f"{x:.4f}"))
+
+    # Kumuleret afkast måned for måned
+    print("\nMånedlige afkast:")
+    print(f"  {'Måned':<10} {'Buy-and-Hold':>14} {'Rebalancering':>14}")
+    print("-" * 42)
+    for date in bah_2025.index:
+        bah_r = bah_2025.loc[date]
+        reb_r = epo_75_2025.loc[date] if date in epo_75_2025.index else float("nan")
+        print(f"  {date.strftime('%Y-%m'):<10} {bah_r:>13.2%} {reb_r:>13.2%}")
+
+    cum_bah = (1 + bah_2025).prod() - 1
+    cum_reb = (1 + epo_75_2025).prod() - 1
+    print("-" * 42)
+    print(f"  {'Kumuleret':<10} {cum_bah:>13.2%} {cum_reb:>13.2%}")
+
+
     # 7. Terminal statistik
     print_top_bottom_stocks(monthly_excess, ticker_to_sector, END_DATE)
     print_top_bottom_correlations(daily_prices, ticker_to_sector, n=10)
@@ -495,6 +836,37 @@ def main():
         backtest_start=BACKTEST_START,
         end_date=END_DATE,
     )
+
+    # Leverage-skalerede vægte
+    backtest_leveraged_buy_and_hold_2025(
+        monthly_excess=monthly_excess,
+        xsmom=xsmom,
+        corr_shrunk=corr_shrunk,
+        vols=vols,
+        gamma=GAMMA,
+        w=0.75,
+        signal_date="2024-12-31",
+        target_leverage=1.0
+    )
+
+    # turnover
+    print("\nGenererer turnover-plot...")
+    plot_turnover(
+        monthly_excess=monthly_excess,
+        xsmom=xsmom,
+        corr_shrunk=corr_shrunk,
+        vols=vols,
+        corr_raw=corr_raw,
+        vols_raw=vols_raw,
+        gamma=GAMMA,
+        backtest_start=START_DATE,
+        end_date=END_DATE,
+        roll_window=12
+    )
+
+    ret_2025 = subset(monthly_excess, "2025-01-01", "2025-12-31")
+    print(f"Gns. månedligt afkast 2025: {ret_2025.mean().mean():.4f}")
+    print(f"Gns. månedlig volatilitet 2025: {ret_2025.std().mean():.4f}")
 
     # 8. Visualiseringer
     print("\nGenererer visualiseringer...")

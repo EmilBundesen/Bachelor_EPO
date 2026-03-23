@@ -16,14 +16,16 @@ Data:
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 
 # Konstanter
 DATA_START_DATE     = "1927-01-01"
 BACKTEST_START_DATE = "1942-01-01"
-BACKTEST_END_DATE   = "2018-12-31"
+BACKTEST_END_DATE   = "2025-12-31"
 
 LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
-RISK_WINDOW      = 60    # Rolling window for covariance estimation (months)
+RISK_WINDOW      = 24    # Rolling window for covariance estimation (months)
 CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
 GAMMA            = 3     # Risk aversion γ (cancels in Sharpe ratio)
 MIN_VOL          = 1e-8  # Floor on vol to avoid division by zero
@@ -418,8 +420,8 @@ def verify_xsmom(xsmom: pd.DataFrame, monthly_ret: pd.DataFrame):
     print("XSMOM SIGNAL VERIFIKATION")
     print("="*55)
 
-    # Tjek et specifikt eksempel: januar 2005
-    test_date = pd.Timestamp("2014-06-01")
+    # Tjek et specifikt eksempel
+    test_date = pd.Timestamp("2025-06-01")
     # Find nærmeste dato
     available = xsmom.index[xsmom.index >= test_date]
     if len(available) == 0:
@@ -486,6 +488,82 @@ def verify_xsmom(xsmom: pd.DataFrame, monthly_ret: pd.DataFrame):
     print("\n" + "="*55)
 
 
+# Vægte pr. 2025-12-31:
+def get_weights_at_date(
+        monthly_excess: pd.DataFrame,
+        signals:        pd.DataFrame,
+        corr_dict:      dict,
+        vols_dict:      dict,
+        epo_panel:      pd.DataFrame,
+        gamma:          float,
+        target_date:    str,
+        top_n:          int = 10
+) -> pd.DataFrame:
+    """
+    Finder EPO-vægte pr. target_date med dynamisk w* (argmax Sharpe).
+    Returnerer top_n største positive og top_n største negative vægte.
+    """
+    t = pd.to_datetime(target_date)
+
+    # Find den seneste tilgængelige signal-dato <= target_date
+    valid_dates = monthly_excess.index[monthly_excess.index <= t]
+    if len(valid_dates) == 0:
+        raise ValueError(f"Ingen data fundet før {target_date}")
+    signal_date = valid_dates[-1]
+    print(f"  Signal-dato:  {signal_date.strftime('%Y-%m')}")
+
+    # Vælg w* = argmax Sharpe over AL tilgængelig panel-historik til og med signal_date
+    past = epo_panel.loc[epo_panel.index <= signal_date]
+    if len(past) < MIN_HISTORY_OOS:
+        raise ValueError(f"For lidt historik til at vælge w* ({len(past)} mdr.)")
+
+    best_w, best_sr = None, -np.inf
+    for col in past.columns:
+        r = past[col].dropna()
+        if len(r) < MIN_HISTORY_OOS:
+            continue
+        sr = sharpe_ratio(r)
+        if sr > best_sr:
+            best_sr = sr
+            best_w  = col
+
+    # Udtræk den numeriske w-værdi fra kolonnenavnet, fx "EPO_w_0.50" → 0.50
+    w_val = float(best_w.replace("EPO_w_", ""))
+    print(f"  Valgt w*:     {w_val:.2f}  (Sharpe = {best_sr:.3f})")
+
+    # Tjek at risiko og signal eksisterer for signal_date
+    if signal_date not in corr_dict:
+        raise ValueError(f"Ingen risikomodel for {signal_date.strftime('%Y-%m')}")
+    if signal_date not in signals.index:
+        raise ValueError(f"Intet XSMOM-signal for {signal_date.strftime('%Y-%m')}")
+
+    # Beregn EPO-vægte
+    wts = epo_weights(
+        signals.loc[signal_date],
+        corr_dict[signal_date],
+        vols_dict[signal_date],
+        gamma, w_val
+    )
+    if len(wts) == 0:
+        raise ValueError("EPO returnerede ingen vægte — tjek signal og risikomodel")
+
+    # Top N positive og top N negative (efter absolut størrelse)
+    pos = wts[wts > 0].nlargest(top_n)
+    neg = wts[wts < 0].nsmallest(top_n)   # nsmallest = mest negative
+
+    pos_df = pos.rename("Weight").to_frame()
+    pos_df["Side"] = "Long"
+    pos_df["Rank"] = [f"Long {i+1}" for i in range(len(pos_df))]
+
+    neg_df = neg.rename("Weight").to_frame()
+    neg_df["Side"] = "Short"
+    neg_df["Rank"] = [f"Short {i+1}" for i in range(len(neg_df))]
+
+    result = pd.concat([pos_df, neg_df])
+    result["Weight_%"] = (result["Weight"] * 100).round(2)
+    return result[["Rank", "Side", "Weight_%"]]
+
+
 #Main
 def main():
     print("\n" + "=" * 65)
@@ -504,6 +582,7 @@ def main():
     #XSMOM signal  (uses raw % returns for the cumulative sum, then excess returns are only needed for the covariance estimation)
     xsmom = compute_xsmom(monthly_excess, LOOKBACK_MONTHS)
     verify_xsmom(xsmom, monthly_excess)
+
 
     #risikomodel
     print("\nBuilding 60-month rolling risk model (5% pre-shrinkage) …")
@@ -527,6 +606,22 @@ def main():
     epo_panel = build_epo_panel(
         monthly_excess, xsmom, corr_shrunk, vols, GAMMA, CANDIDATE_WS)
     print(f"  Panel shape: {epo_panel.shape}")
+
+    # ── Vægte pr. 2025-12-31 ──────────────────────────────────────────────
+    print("\n" + "=" * 65)
+    print("SEKTORVÆGTE PR. 2025-12-31  (EPO_OOS_dynamic, top/bottom 10)")
+    print("=" * 65)
+    weights_2025 = get_weights_at_date(
+        monthly_excess=monthly_excess,
+        signals=xsmom,
+        corr_dict=corr_shrunk,
+        vols_dict=vols,
+        epo_panel=epo_panel,
+        gamma=GAMMA,
+        target_date="2025-12-31",
+        top_n=10
+    )
+    print(weights_2025.to_string())
 
     #Dynamisk EPO
     print("\nBuilding dynamic OOS EPO …")
