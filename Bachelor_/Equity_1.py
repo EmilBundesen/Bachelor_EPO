@@ -488,7 +488,7 @@ def verify_xsmom(xsmom: pd.DataFrame, monthly_ret: pd.DataFrame):
     print("\n" + "="*55)
 
 
-# Vægte pr. 2025-12-31:
+# Vægte pr. 2022-12-31:
 def get_weights_at_date(
         monthly_excess: pd.DataFrame,
         signals:        pd.DataFrame,
@@ -564,6 +564,128 @@ def get_weights_at_date(
     return result[["Rank", "Side", "Weight_%"]]
 
 
+def print_avg_epo_weights_year(monthly_excess, xsmom, corr_dict, vols_dict,
+                                epo_panel, gamma,
+                                start="2022-01-01", end="2022-12-31",
+                                top_n=10) -> pd.DataFrame:
+    """
+    Beregner gennemsnitlige EPO-vægte (dynamisk w*) for hver måned i 2024
+    og udskriver de top_n long og top_n short industrier rangeret efter
+    gennemsnitlig vægt over perioden.
+    """
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    dates = [d for d in monthly_excess.index if s <= d <= e]
+
+    weight_records = {}
+    for date in dates:
+        past = epo_panel.loc[epo_panel.index < date]
+        if len(past) < MIN_HISTORY_OOS:
+            continue
+
+        best_w, best_sr = None, -np.inf
+        for col in past.columns:
+            r = past[col].dropna()
+            if len(r) < MIN_HISTORY_OOS:
+                continue
+            sr = sharpe_ratio(r)
+            if sr > best_sr:
+                best_sr = sr
+                best_w  = col
+
+        if best_w is None:
+            continue
+
+        w_val = float(best_w.replace("EPO_w_", ""))
+
+        if date not in corr_dict or date not in xsmom.index:
+            continue
+
+        wts = epo_weights(xsmom.loc[date], corr_dict[date],
+                          vols_dict[date], gamma, w_val)
+        if len(wts) > 0:
+            weight_records[date] = wts
+
+    if not weight_records:
+        print("Ingen vægte beregnet for perioden.")
+        return pd.DataFrame()
+
+    weights_df = pd.DataFrame(weight_records).T.fillna(0)
+    mean_wts   = weights_df.mean()
+
+    top_long  = mean_wts.nlargest(top_n)
+    top_short = mean_wts.nsmallest(top_n)
+
+    print("\n" + "=" * 55)
+    print(f"GENNEMSNITLIGE EPO-VÆGTE — {start[:4]}")
+    print("=" * 55)
+    print(f"\n  Top {top_n} long:")
+    print(f"  {'Industri':<25} {'Gns. vægt':>10}")
+    print("  " + "-" * 37)
+    for ticker, val in top_long.items():
+        print(f"  {ticker:<25} {val:>+10.4f}")
+
+    print(f"\n  Top {top_n} short:")
+    print(f"  {'Industri':<25} {'Gns. vægt':>10}")
+    print("  " + "-" * 37)
+    for ticker, val in top_short.items():
+        print(f"  {ticker:<25} {val:>+10.4f}")
+    print("=" * 55)
+
+    return weights_df
+
+
+def compute_elo_scores(rolling_weights: pd.DataFrame, n: int = 5) -> pd.DataFrame:
+    """
+    Beregner ELO-inspireret score per industri baseret på:
+      1) Antal gange industrien optræder i top-n long/short
+      2) Hvilken rank de har fået (rank 1 = højest score)
+
+    Scoren per observation = n - rank + 1
+    (rank 1 → n point, rank 2 → n-1 point, ..., rank n → 1 point)
+
+    Returnerer DataFrame med long_score, short_score, long_appearances,
+    short_appearances sorteret efter long_score descending.
+    """
+    long_scores  = {}
+    short_scores = {}
+    long_app     = {}
+    short_app    = {}
+
+    for date, row in rolling_weights.iterrows():
+        avail = row.dropna()
+        if len(avail) < n * 2:
+            continue
+
+        top_n    = avail.nlargest(n)
+        bottom_n = avail.nsmallest(n)
+
+        for rank, ticker in enumerate(top_n.index, 1):
+            score = n - rank + 1
+            long_scores[ticker] = long_scores.get(ticker, 0) + score
+            long_app[ticker]    = long_app.get(ticker, 0) + 1
+
+        for rank, ticker in enumerate(bottom_n.index, 1):
+            score = n - rank + 1
+            short_scores[ticker] = short_scores.get(ticker, 0) + score
+            short_app[ticker]    = short_app.get(ticker, 0) + 1
+
+    all_tickers = set(long_scores) | set(short_scores)
+    rows = []
+    for ticker in all_tickers:
+        rows.append({
+            "Industri":          ticker,
+            "Long score":        long_scores.get(ticker, 0),
+            "Long optræden":     long_app.get(ticker, 0),
+            "Short score":       short_scores.get(ticker, 0),
+            "Short optræden":    short_app.get(ticker, 0),
+        })
+
+    df = (pd.DataFrame(rows)
+            .set_index("Industri")
+            .sort_values("Long score", ascending=False))
+
+    return df
+
 #Main
 def main():
     print("\n" + "=" * 65)
@@ -607,21 +729,12 @@ def main():
         monthly_excess, xsmom, corr_shrunk, vols, GAMMA, CANDIDATE_WS)
     print(f"  Panel shape: {epo_panel.shape}")
 
-    # ── Vægte pr. 2025-12-31 ──────────────────────────────────────────────
-    print("\n" + "=" * 65)
-    print("SEKTORVÆGTE PR. 2025-12-31  (EPO_OOS_dynamic, top/bottom 10)")
-    print("=" * 65)
-    weights_2025 = get_weights_at_date(
-        monthly_excess=monthly_excess,
-        signals=xsmom,
-        corr_dict=corr_shrunk,
-        vols_dict=vols,
-        epo_panel=epo_panel,
-        gamma=GAMMA,
-        target_date="2025-12-31",
-        top_n=10
-    )
-    print(weights_2025.to_string())
+
+    # Her kan der findes vægte på bestemt dag ved funktionen get_weights_at_date
+    # Eller gennemsnitlige vægte ved funktionen print_avg_epo_weights_year()
+
+    print_avg_epo_weights_year(monthly_excess, xsmom, corr_raw, vols_raw,
+    epo_panel, GAMMA, start = "2022-01-01", end = "2022-12-31", top_n = 10)
 
     #Dynamisk EPO
     print("\nBuilding dynamic OOS EPO …")

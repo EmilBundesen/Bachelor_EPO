@@ -31,9 +31,9 @@ sectors = {
     "trans": ["UPS", "FDX", "CSX", "UNP", "NSC", "JBHT", "ODFL", "SAIA", "XPO", "CHRW"],
     "util": ["NEE", "SO", "DUK", "AEP", "SRE", "D", "EXC", "PCG", "ED", "XEL"]
 }
-"""
 
-# ── Konfiguration - 24 måneders risikovindue med 12 måneders signal
+
+# ── Konfiguration - 24 måneders risikovindue med 12 måneders signal baseret på EPO vægte ultimo 2024
 sectors = {
   "smoke":  ["PM", "MO", "BTI", "UVV", "TPB", "RLX", "XXII"],
   "other":  ["BRK-B", "HON", "GE", "RTX", "CAT", "DE", "ITW", "DOV", "EMR", "MMM"],
@@ -56,9 +56,38 @@ sectors = {
   "rubbr":  ["GT", "TWI", "MYE"],
   "steel":  ["NUE", "STLD", "PKX", "MT", "VALE", "SID", "GGB", "TX", "CMC"]
 }
+"""
+
+# ── Konfiguration - 24 måneders risikovindue med 12 måneders signal baseret på EPO vægte ultimo 2022
+sectors = {
+  "smoke":  ["PM", "MO", "BTI", "UVV", "TPB", "RLX", "XXII"],
+  "other":  ["BRK-B", "HON", "GE", "RTX", "CAT", "DE", "ITW", "DOV", "EMR", "MMM"],
+  "util":   ["NEE", "DUK", "SO", "D", "AEP", "EXC", "SRE", "XEL", "PEG", "ED", "EIX", "AWK", "CNP", "WEC"],
+  "chips":  ["NVDA", "TSM", "AVGO", "ASML", "AMD", "INTC", "QCOM", "TXN", "MU", "ADI"],
+  "guns":   ["SWBI", "RGR", "OLN", "POWW", "SPWH", "DKS", "ASO", "AXON", "NPK", "AOUT"],
+  "rtail":  ["AMZN", "WMT", "COST", "HD", "LOW", "TGT", "TJX", "ROST", "DG", "DLTR"],
+  "hardw":  ["AAPL", "DELL", "HPQ", "NTAP", "STX", "WDC", "ANET", "CSCO", "HPE", "SMCI"],
+  "fun":    ["DIS", "NFLX", "SONY", "EA", "TTWO", "RBLX", "LYV", "WBD", "FOX"],
+  "fin":    ["V", "MA", "PYPL", "AXP", "COF", "SYF", "FIS", "FISV", "GPN"],
+  "banks":  ["JPM", "BAC", "WFC", "C", "HSBC", "HDB", "RY", "TD", "UBS", "SAN"],
+  "beer":   ["BUD", "DEO", "STZ", "TAP", "SAM", "CCU", "HEINY", "FMX", "BF-B"],
+  "food":   ["NSRGY", "MDLZ", "KHC", "GIS", "HSY", "SJM", "HRL", "CAG", "CPB", "TSN", "ADM", "BG"],
+  "soda":   ["KO", "PEP", "KDP", "MNST", "CELH", "COKE", "FIZZ", "KOF", "PRMB", "COCO", "ZVIA"],
+  "drugs":  ["LLY", "JNJ", "NVO", "MRK", "ABBV", "PFE", "AZN", "BMY", "GILD", "AMGN"],
+  "hlth":   ["UNH", "ELV", "CI", "CVS", "HUM", "HCA", "UHS", "THC", "MOH"],
+  "chems":  ["LIN", "SHW", "APD", "ECL", "DD", "DOW", "PPG", "LYB", "IFF", "FMC"],
+  "oil":    ["XOM", "CVX", "SHEL", "TTE", "BP", "COP", "EOG", "SLB", "PBR", "ENB", "OXY", "DVN", "MPC", "PSX", "VLO", "FANG"],
+  "clths":  ["NKE", "ADDYY", "LULU", "PVH", "VFC", "COLM"],
+  "rubbr":  ["GT", "TWI", "MYE"],
+  "steel":  ["NUE", "STLD", "PKX", "MT", "VALE", "SID", "GGB", "TX", "CMC"],
+  "agric":  ["CTVA", "NTR", "MOS", "CF", "AGCO", "CALM", "ANDE"],
+  "insur":  ["MET", "PRU", "AFL", "ALL", "PGR", "TRV", "AIG", "KNSL"],
+  "coal":   ["BTU", "AMR", "ARLP", "HCC", "METC", "NRP", "SXC", "NC"],
+  "whlsl":  ["SYY", "GWW", "WCC", "MSM", "AIT", "WSO", "USFD", "UNFI", "FERG", "CNM", "PFGC"],
+}
 
 
-START_DATE = "2015-01-01"
+START_DATE = "2010-01-01"
 END_DATE   = "2025-12-31"
 
 # Filstier

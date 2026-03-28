@@ -29,7 +29,7 @@ from Signal_Visual import (
     compute_turnover_series
 )
 
-START_DATE        = "2015-01-01"
+START_DATE        = "2010-01-01"
 END_DATE          = "2025-12-31"
 BACKTEST_START    = "2020-01-01"
 MAX_NAN_THRESHOLD = 0.20
@@ -398,18 +398,42 @@ def plot_visualizations(monthly_excess, daily, ticker_to_sector,
 
     # ── Plot 2: Kumuleret afkast pr. sektor ───────────────────
     fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Beregn kumuleret afkast per sektor
+    sector_cum_final = {}
+    sector_cum_series = {}
     for sector, tickers in sector_groups.items():
         available = [t for t in tickers if t in full.columns]
         if not available:
             continue
         sector_ret = full[available].mean(axis=1)
-        ax.plot(cum(sector_ret), label=sector.capitalize(), linewidth=2)
+        cum_series = (1 + sector_ret).cumprod() - 1
+        sector_cum_final[sector] = cum_series.iloc[-1]
+        sector_cum_series[sector] = cum_series
+
+    # Top 5 og bund 5
+    sorted_sectors = sorted(sector_cum_final, key=sector_cum_final.get, reverse=True)
+    top5 = sorted_sectors[:5]
+    bottom5 = sorted_sectors[-5:]
+    show = set(top5 + bottom5)
+
+    colors_top = sns.color_palette("Greens_d", 5)
+    colors_bottom = sns.color_palette("Reds_d", 5)
+
+    for i, sector in enumerate(top5):
+        ax.plot(sector_cum_series[sector], label=f"↑ {sector.capitalize()}",
+                linewidth=2, color=colors_top[i])
+
+    for i, sector in enumerate(bottom5):
+        ax.plot(sector_cum_series[sector], label=f"↓ {sector.capitalize()}",
+                linewidth=2, color=colors_bottom[i], linestyle="--")
+
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-    ax.set_title("Kumuleret afkast pr. sektor (hele periode, equal-weighted)",
+    ax.set_title("Kumuleret afkast pr. sektor — top 5 og bund 5 (hele periode, equal-weighted)",
                  fontsize=13, fontweight="bold")
     ax.set_ylabel("Kumuleret afkast")
     ax.set_xlabel("Dato")
-    ax.legend(fontsize=10)
+    ax.legend(fontsize=10, ncol=2)
     plt.tight_layout()
     plt.show()
 
@@ -491,7 +515,7 @@ def print_leverage_table(monthly_excess, xsmom, corr_shrunk, vols,
 
 # EPO vægte over tid
 def plot_epo_weights_over_time(monthly_excess, xsmom, corr_shrunk, vols,
-                                gamma, w=0.75, start="2025-01-01",
+                                gamma, w=0.75, start="2023-01-01",
                                 end="2025-12-31", top_n=10):
     """
     Beregner EPO-vægte (w=0.75) for hver måned i perioden og viser
@@ -697,14 +721,336 @@ def backtest_leveraged_buy_and_hold_2025(monthly_excess, xsmom, corr_shrunk, vol
 
     return bah_unscaled, bah_scaled
 
+# debug
+def visualize_date_flow_simple(monthly_excess, xsmom, vols_dict, corr_dict):
+    """
+    Viser tidsflow: signal → vægte → return.
+    """
+    print("="*90)
+    print("FULL DATE FLOW VISUALIZATION (2015-2025)")
+    print("="*90)
+    print(f"{'Portefølje':<12} {'Signal':<12} {'Risk':<12} {'Return':<12} {'Status':<12}")
+    print("-"*90)
+
+    for port_date in monthly_excess.index:
+        # Signal = sidste tilgængelige signal før port_date
+        sig_date = xsmom.index[xsmom.index < port_date][-1] if any(xsmom.index < port_date) else pd.NaT
+
+        # Risk = sidste tilgængelige risiko før port_date
+        risk_dates = sorted(set(vols_dict.keys()).intersection(set(corr_dict.keys())))
+        risk_date = max([d for d in risk_dates if d <= port_date], default=pd.NaT)
+
+        # Return = næste måned efter port_date
+        ret_idx = monthly_excess.index[monthly_excess.index > port_date]
+        ret_date = ret_idx[0] if len(ret_idx) > 0 else pd.NaT
+
+        # Tjek rækkefølge
+        if sig_date is pd.NaT or ret_date is pd.NaT:
+            status = "NA"
+        elif sig_date < port_date < ret_date:
+            status = "OK"
+        else:
+            status = "LOOK-AHEAD!"
+
+        print(f"{port_date.strftime('%Y-%m'):<12} "
+              f"{sig_date.strftime('%Y-%m') if sig_date is not pd.NaT else 'NA':<12} "
+              f"{risk_date.strftime('%Y-%m') if risk_date is not pd.NaT else 'NA':<12} "
+              f"{ret_date.strftime('%Y-%m') if ret_date is not pd.NaT else 'NA':<12} "
+              f"{status:<12}")
+
+## Implementering af 2023 aktieunivers
+
+def backtest_buy_and_hold_period(monthly_excess, xsmom, corr_shrunk, vols,
+                                  gamma, w=0.75,
+                                  signal_date="2022-12-31",
+                                  start="2023-01-01",
+                                  end="2025-12-31"):
+    """
+    Buy-and-Hold: vægte fryses én gang ved signal_date.
+    """
+    sig_date = monthly_excess.index[
+        monthly_excess.index <= pd.to_datetime(signal_date)
+    ][-1]
+
+    wts = epo_weights(
+        signal=xsmom.loc[sig_date],
+        corr=corr_shrunk[sig_date],
+        vols=vols[sig_date],
+        gamma=gamma,
+        w=w
+    )
+    if len(wts) == 0:
+        raise ValueError("Ingen vægte beregnet.")
+
+    period = monthly_excess.loc[start:end]
+    rets, dates = [], []
+    for date, row in period.iterrows():
+        r     = row.reindex(wts.index).dropna()
+        w_aln = wts.reindex(r.index).dropna()
+        if len(w_aln) == 0:
+            continue
+        rets.append((w_aln * r.reindex(w_aln.index)).sum())
+        dates.append(date)
+
+    return pd.Series(rets, index=dates, name=f"Buy-and-Hold EPO w={w}")
+
+
+def backtest_annual_rebalance_period(monthly_excess, xsmom, corr_shrunk, vols,
+                                      gamma, w=0.75,
+                                      start="2023-01-01",
+                                      end="2025-12-31"):
+    """
+    Årlig rebalancering: vægte genberegnes hvert januar
+    ud fra signal fra december måneden før.
+    """
+    period = monthly_excess.loc[start:end]
+    current_wts = None
+    rets, dates = [], []
+
+    for date, row in period.iterrows():
+        # Genberegn vægte i januar hvert år
+        if date.month == 1 or current_wts is None:
+            valid_signals = xsmom.index[xsmom.index < date]
+            if len(valid_signals) == 0:
+                continue
+            sig_date = valid_signals[-1]
+
+            if sig_date not in corr_shrunk or sig_date not in vols:
+                continue
+
+            wts = epo_weights(
+                signal=xsmom.loc[sig_date],
+                corr=corr_shrunk[sig_date],
+                vols=vols[sig_date],
+                gamma=gamma,
+                w=w
+            )
+            if len(wts) > 0:
+                current_wts = wts
+
+        if current_wts is None:
+            continue
+
+        r     = row.reindex(current_wts.index).dropna()
+        w_aln = current_wts.reindex(r.index).dropna()
+        if len(w_aln) == 0:
+            continue
+        rets.append((w_aln * r.reindex(w_aln.index)).sum())
+        dates.append(date)
+
+    return pd.Series(rets, index=dates, name=f"Årlig rebalancering EPO w={w}")
+
+
+def print_monthly_comparison_table(strategies: dict[str, pd.Series],
+                                    start="2023-01-01",
+                                    end="2025-12-31"):
+    """
+    Printer månedlige afkast side om side for flere strategier.
+    strategies: dict med navn → pd.Series af månedlige afkast
+    """
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+
+    # Saml alle datoer
+    all_dates = sorted(set().union(*[s_.loc[s:e].index for s_ in strategies.values()]))
+
+    col_w = 16
+    header = f"  {'Måned':<10}" + "".join(f"{name:>{col_w}}" for name in strategies)
+    sep    = "-" * (12 + col_w * len(strategies))
+
+    print("\n" + "=" * (12 + col_w * len(strategies)))
+    print(f"MÅNEDLIGE AFKAST — {start[:7]} → {end[:7]}")
+    print("=" * (12 + col_w * len(strategies)))
+    print(header)
+    print(sep)
+
+    cum = {name: 1.0 for name in strategies}
+
+    for date in all_dates:
+        row_str = f"  {date.strftime('%Y-%m'):<10}"
+        for name, series in strategies.items():
+            if date in series.index:
+                r = series.loc[date]
+                cum[name] *= (1 + r)
+                row_str += f"{r:>{col_w}.2%}"
+            else:
+                row_str += f"{'N/A':>{col_w}}"
+        print(row_str)
+
+    print(sep)
+    cum_str = f"  {'Kumuleret':<10}"
+    for name in strategies:
+        cum_str += f"{cum[name] - 1:>{col_w}.2%}"
+    print(cum_str)
+    print("=" * (12 + col_w * len(strategies)))
+
+    # Kort performance-opsummering
+    print(f"\n  {'Strategi':<35} {'Ann. Ret':>10} {'Ann. Vol':>10} {'Sharpe':>8}")
+    print("-" * 67)
+    for name, series in strategies.items():
+        s_ = series.loc[s:e]
+        perf = performance_summary(s_, name)
+        print(f"  {name:<35} {perf['Ann. Return']:>10.4f} "
+              f"{perf['Ann. Vol']:>10.4f} {perf['Sharpe']:>8.4f}")
+
+# Leverage justeret årligt afkast:
+# ── Leverage-skaleret 2023-2025 sammenligning ─────────────────
+
+def backtest_leverage_scaled_period(monthly_excess, xsmom, corr_shrunk, vols,
+                                     gamma, w=0.75,
+                                     start="2023-01-01",
+                                     end="2025-12-31",
+                                     target_ge=1.0):
+    """
+    Returnerer leverage-skalerede versioner af alle fire strategier
+    i perioden 2023-2025, skaleret til target_ge brutto-eksponering.
+    Skaleringen sker måned for måned baseret på den aktuelle GE.
+    """
+
+    period = monthly_excess.loc[start:end]
+
+    # ── Buy-and-Hold (fryses ved 2022-12-31) ─────────────────
+    sig_date_bah = monthly_excess.index[
+        monthly_excess.index <= pd.to_datetime("2022-12-31")
+    ][-1]
+    wts_bah = epo_weights(xsmom.loc[sig_date_bah], corr_shrunk[sig_date_bah],
+                           vols[sig_date_bah], gamma, w)
+    ge_bah   = wts_bah.abs().sum()
+    wts_bah_scaled = wts_bah * (target_ge / ge_bah)
+
+    # ── Årlig rebalancering ───────────────────────────────────
+    current_wts_ann = None
+    current_wts_ann_scaled = None
+
+    rets_bah, rets_mon, rets_ann, rets_ew, dates = [], [], [], [], []
+
+    for date, row in period.iterrows():
+
+        # Månedlig rebalancering: hent EPO-vægte fra signal måneden før
+        valid_signals = xsmom.index[xsmom.index < date]
+        if len(valid_signals) == 0:
+            continue
+        sig_date = valid_signals[-1]
+
+        if sig_date not in corr_shrunk or sig_date not in vols:
+            continue
+
+        wts_mon = epo_weights(xsmom.loc[sig_date], corr_shrunk[sig_date],
+                               vols[sig_date], gamma, w)
+        if len(wts_mon) == 0:
+            continue
+        ge_mon = wts_mon.abs().sum()
+        wts_mon_scaled = wts_mon * (target_ge / ge_mon) if ge_mon > 0 else wts_mon
+
+        # Årlig rebalancering: opdater i januar
+        if date.month == 1 or current_wts_ann is None:
+            wts_ann = epo_weights(xsmom.loc[sig_date], corr_shrunk[sig_date],
+                                   vols[sig_date], gamma, w)
+            if len(wts_ann) > 0:
+                current_wts_ann = wts_ann
+                ge_ann = wts_ann.abs().sum()
+                current_wts_ann_scaled = wts_ann * (target_ge / ge_ann) if ge_ann > 0 else wts_ann
+
+        if current_wts_ann_scaled is None:
+            continue
+
+        r = row
+
+        # Buy-and-Hold
+        r_bah = r.reindex(wts_bah_scaled.index).dropna()
+        w_bah = wts_bah_scaled.reindex(r_bah.index).dropna()
+        ret_bah = (w_bah * r_bah.reindex(w_bah.index)).sum() if len(w_bah) > 0 else np.nan
+
+        # Månedlig reb.
+        r_mon = r.reindex(wts_mon_scaled.index).dropna()
+        w_mon = wts_mon_scaled.reindex(r_mon.index).dropna()
+        ret_mon = (w_mon * r_mon.reindex(w_mon.index)).sum() if len(w_mon) > 0 else np.nan
+
+        # Årlig reb.
+        r_ann = r.reindex(current_wts_ann_scaled.index).dropna()
+        w_ann = current_wts_ann_scaled.reindex(r_ann.index).dropna()
+        ret_ann = (w_ann * r_ann.reindex(w_ann.index)).sum() if len(w_ann) > 0 else np.nan
+
+        # 1/N (ingen skalering nødvendig — GE = 1 per definition)
+        r_ew = r.dropna()
+        ret_ew = r_ew.mean() if len(r_ew) > 0 else np.nan
+
+        rets_bah.append(ret_bah)
+        rets_mon.append(ret_mon)
+        rets_ann.append(ret_ann)
+        rets_ew.append(ret_ew)
+        dates.append(date)
+
+    return {
+        f"Buy-and-Hold (skaleret {target_ge:.0%} GE)":      pd.Series(rets_bah, index=dates),
+        f"Månedlig reb. (skaleret {target_ge:.0%} GE)":     pd.Series(rets_mon, index=dates),
+        f"Årlig reb. (skaleret {target_ge:.0%} GE)":        pd.Series(rets_ann, index=dates),
+        "1/N (Equal Weight)":                                pd.Series(rets_ew,  index=dates),
+    }
+
+
+def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
+                               start="2023-01-01", end="2025-12-31"):
+    """
+    Printer årlige afkast for leverage-skalerede strategier side om side.
+    """
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    years = sorted({d.year for series in scaled_strategies.values()
+                    for d in series.loc[s:e].index})
+
+    names = list(scaled_strategies.keys())
+    col_w = 26
+
+    header = f"  {'År':<8}" + "".join(f"{n:>{col_w}}" for n in names)
+    sep    = "-" * (10 + col_w * len(names))
+
+    print("\n" + "=" * (10 + col_w * len(names)))
+    print(f"ÅRLIGE AFKAST (LEVERAGE-SKALERET) — {start[:4]}–{end[:4]}")
+    print("=" * (10 + col_w * len(names)))
+    print(header)
+    print(sep)
+
+    for year in years:
+        row_str = f"  {year:<8}"
+        for name, series in scaled_strategies.items():
+            yr_data = series.loc[s:e]
+            yr_data = yr_data[yr_data.index.year == year].dropna()
+            if len(yr_data) == 0:
+                row_str += f"{'N/A':>{col_w}}"
+            else:
+                ann_ret = (1 + yr_data).prod() - 1
+                row_str += f"{ann_ret:>{col_w}.2%}"
+        print(row_str)
+
+    # Kumuleret
+    print(sep)
+    cum_str = f"  {'Kumuleret':<8}"
+    for name, series in scaled_strategies.items():
+        data = series.loc[s:e].dropna()
+        cum  = (1 + data).prod() - 1
+        cum_str += f"{cum:>{col_w}.2%}"
+    print(cum_str)
+
+    # Performance
+    print(sep)
+    print(f"\n  {'Strategi':<45} {'Ann. Ret':>10} {'Ann. Vol':>10} {'Sharpe':>8}")
+    print("-" * 77)
+    for name, series in scaled_strategies.items():
+        data = series.loc[s:e].dropna()
+        perf = performance_summary(data, name)
+        print(f"  {name:<45} {perf['Ann. Return']:>10.4f} "
+              f"{perf['Ann. Vol']:>10.4f} {perf['Sharpe']:>8.4f}")
+    print("=" * (10 + col_w * len(names)))
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
     print("=" * 65)
     print("EPO — Yahoo Finance enkeltaktier")
     print(f"Data: {START_DATE} → {END_DATE}")
-    print(f"Backtest OOS fra: {BACKTEST_START}")
+    print(f"Backtest OOS fra: 2020-01-01")
     print("=" * 65)
+
+    BACKTEST_START_NEW = "2020-01-01"
 
     # 1. Data
     daily, daily_prices, ticker_to_sector = load_data()
@@ -737,7 +1083,7 @@ def main():
     mom_full    = backtest_simple_momentum(monthly_excess, monthly,
                                            n=N_LONG_SHORT)
     mom_ew_full = backtest_simple_momentum_ew(monthly_excess, monthly)
-    én_over_N = compute_equal_weight_benchmark(monthly_excess)
+    én_over_N   = compute_equal_weight_benchmark(monthly_excess)
 
     # 5. EPO
     print("\nBygger EPO panel...")
@@ -745,10 +1091,10 @@ def main():
         monthly_excess, xsmom, corr_shrunk, vols, GAMMA, CANDIDATE_WS)
     print("\nBygger dynamisk OOS EPO...")
     epo_dyn = build_dynamic_oos_epo(
-        epo_panel, oos_start=BACKTEST_START, min_history=MIN_HISTORY_OOS)
+        epo_panel, oos_start=BACKTEST_START_NEW, min_history=MIN_HISTORY_OOS)
 
-    # 6. Performance tabel
-    s, e = BACKTEST_START, END_DATE
+    # ── 6. Performance tabel OOS 2020-2025 ───────────────────
+    s, e = BACKTEST_START_NEW, END_DATE
     rows = [
         performance_summary(subset(indmom_full, s, e),
                             "Vol-Scaled / INDMOM (anchor)"),
@@ -759,7 +1105,7 @@ def main():
         performance_summary(subset(epo_dyn,     s, e),
                             "EPO: out-of-sample"),
         performance_summary(subset(mom_ew_full, s, e), "TSMOM EW (hele univers)"),
-        performance_summary(subset(én_over_N, s, e), "1/N"),
+        performance_summary(subset(én_over_N,   s, e), "1/N"),
     ]
     w_labels = {
         0.00: "EPO w=0%   (MVO + 5% pre-shrink)",
@@ -777,54 +1123,76 @@ def main():
     perf = pd.DataFrame(rows).set_index("Strategy")
 
     print("\n" + "=" * 65)
-    print(f"PERFORMANCE — OOS: {BACKTEST_START} → {END_DATE}")
+    print(f"PERFORMANCE — OOS: {BACKTEST_START_NEW} → {END_DATE}")
     print("=" * 65)
     print(perf.to_string())
 
-    perf.to_csv("performance_summary.csv")
-    print("\nGemt: performance_summary.csv")
+    perf.to_csv("performance_summary_2020_2025.csv")
+    print("\nGemt: performance_summary_2020_2025.csv")
 
-    # ── Buy-and-hold vs. månedlig rebalancering 2025 ─────────────
-    bah_2025 = backtest_buy_and_hold_2025(
-        monthly_excess=monthly_excess,
-        xsmom=xsmom,
-        corr_shrunk=corr_shrunk,
-        vols=vols,
-        gamma=GAMMA,
-        w=0.75
+    # ── 7. Månedlige afkast 2023-2025: fire strategier ────────
+    PERIOD_START = "2023-01-01"
+    PERIOD_END   = "2025-12-31"
+    W            = 0.75
+
+    print("\nBeregner 2023-2025 strategier...")
+
+    # Buy-and-Hold (fryses én gang ved 2022-12-31)
+    bah = backtest_buy_and_hold_period(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, w=W,
+        signal_date="2022-12-31",
+        start=PERIOD_START, end=PERIOD_END
     )
 
-    epo_75_2025 = subset(epo_panel["EPO_w_0.75"], "2025-01-01", "2025-12-31")
+    # Månedlig rebalancering (EPO w=0.75 fra panel)
+    monthly_reb = subset(epo_panel[f"EPO_w_{W:.2f}"], PERIOD_START, PERIOD_END)
+    monthly_reb.name = f"Månedlig rebalancering EPO w={W}"
 
-    print("\n" + "=" * 60)
-    print("BUY-AND-HOLD vs. MÅNEDLIG REBALANCERING — 2025")
-    print("=" * 60)
-    sammenligning = pd.DataFrame([
-        performance_summary(bah_2025, "Buy-and-Hold EPO w=0.75"),
-        performance_summary(epo_75_2025, "Månedlig rebalancering EPO w=0.75"),
-    ]).set_index("Strategy")[["Ann. Return", "Ann. Vol", "Sharpe"]]
-    print(sammenligning.to_string(float_format=lambda x: f"{x:.4f}"))
+    # Årlig rebalancering
+    annual_reb = backtest_annual_rebalance_period(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END
+    )
 
-    # Kumuleret afkast måned for måned
-    print("\nMånedlige afkast:")
-    print(f"  {'Måned':<10} {'Buy-and-Hold':>14} {'Rebalancering':>14}")
-    print("-" * 42)
-    for date in bah_2025.index:
-        bah_r = bah_2025.loc[date]
-        reb_r = epo_75_2025.loc[date] if date in epo_75_2025.index else float("nan")
-        print(f"  {date.strftime('%Y-%m'):<10} {bah_r:>13.2%} {reb_r:>13.2%}")
+    # 1/N
+    ew = subset(én_over_N, PERIOD_START, PERIOD_END)
+    ew.name = "1/N (Equal Weight)"
 
-    cum_bah = (1 + bah_2025).prod() - 1
-    cum_reb = (1 + epo_75_2025).prod() - 1
-    print("-" * 42)
-    print(f"  {'Kumuleret':<10} {cum_bah:>13.2%} {cum_reb:>13.2%}")
+    # Print samlet tabel
+    print_monthly_comparison_table(
+        strategies={
+            f"Buy-and-Hold EPO w={W}":        bah,
+            f"Månedlig reb. EPO w={W}":        monthly_reb,
+            f"Årlig reb. EPO w={W}":           annual_reb,
+            "1/N (Equal Weight)":              ew,
+        },
+        start=PERIOD_START,
+        end=PERIOD_END
+    )
 
+    # ── 7b. Leverage-skalerede årlige afkast 2023-2025 ────────
+    # EPO w=0.75 har gns. GE = 176% → skalér til 100% GE
+    TARGET_GE = 1.0  # 100% GE
 
-    # 7. Terminal statistik
+    print(f"\nBeregner leverage-skalerede afkast (target GE = {TARGET_GE:.0%})...")
+    scaled = backtest_leverage_scaled_period(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END,
+        target_ge=TARGET_GE
+    )
+    print_scaled_annual_table(scaled, start=PERIOD_START, end=PERIOD_END)
+
+    # ── 8. Øvrig output (uændret) ─────────────────────────────
     print_top_bottom_stocks(monthly_excess, ticker_to_sector, END_DATE)
     print_top_bottom_correlations(daily_prices, ticker_to_sector, n=10)
 
-    # 7b. Leverage tabel
+    plot_epo_weights_over_time(monthly_excess, xsmom, corr_shrunk, vols,
+                               GAMMA, w=0.75, start="2023-01-01",
+                               end="2025-12-31", top_n=10)
+
     print_leverage_table(
         monthly_excess=monthly_excess,
         xsmom=xsmom,
@@ -833,23 +1201,10 @@ def main():
         corr_raw=corr_raw,
         vols_raw=vols_raw,
         gamma=GAMMA,
-        backtest_start=BACKTEST_START,
+        backtest_start=BACKTEST_START_NEW,
         end_date=END_DATE,
     )
 
-    # Leverage-skalerede vægte
-    backtest_leveraged_buy_and_hold_2025(
-        monthly_excess=monthly_excess,
-        xsmom=xsmom,
-        corr_shrunk=corr_shrunk,
-        vols=vols,
-        gamma=GAMMA,
-        w=0.75,
-        signal_date="2024-12-31",
-        target_leverage=1.0
-    )
-
-    # turnover
     print("\nGenererer turnover-plot...")
     plot_turnover(
         monthly_excess=monthly_excess,
@@ -864,11 +1219,6 @@ def main():
         roll_window=12
     )
 
-    ret_2025 = subset(monthly_excess, "2025-01-01", "2025-12-31")
-    print(f"Gns. månedligt afkast 2025: {ret_2025.mean().mean():.4f}")
-    print(f"Gns. månedlig volatilitet 2025: {ret_2025.std().mean():.4f}")
-
-    # 8. Visualiseringer
     print("\nGenererer visualiseringer...")
     plot_visualizations(
         monthly_excess   = monthly_excess,
@@ -885,7 +1235,6 @@ def main():
         "performance":      perf,
         "ticker_to_sector": ticker_to_sector,
     }
-
 
 if __name__ == "__main__":
     results = main()
