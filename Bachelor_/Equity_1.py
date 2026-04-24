@@ -20,12 +20,12 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
 # Konstanter
-DATA_START_DATE     = "1927-01-01"
-BACKTEST_START_DATE = "1942-01-01"
+DATA_START_DATE     = "1985-01-01"
+BACKTEST_START_DATE = "2010-01-01"
 BACKTEST_END_DATE   = "2025-12-31"
 
 LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
-RISK_WINDOW      = 24    # Rolling window for covariance estimation (months)
+RISK_WINDOW      = 36    # Rolling window for covariance estimation (months)
 CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
 GAMMA            = 3     # Risk aversion γ (cancels in Sharpe ratio)
 MIN_VOL          = 1e-8  # Floor on vol to avoid division by zero
@@ -194,7 +194,6 @@ def epo_weights(signal:  pd.Series,
     C     = corr.loc[common, common]
     v     = vols.loc[common]
 
-    # Drop near-zero-vol industries
     ok    = v >= min_vol
     s_vec = s_vec[ok]; v = v[ok]; C = C.loc[ok, ok]
     if len(s_vec) < 2:
@@ -203,15 +202,16 @@ def epo_weights(signal:  pd.Series,
     v_a = v.values
     s_a = s_vec.values
     C_a = C.values
+    n   = len(s_a)
 
-    # Step 1: Σ = D · Ω̃ · D
-    Sigma   = C_a * np.outer(v_a, v_a)
+    # Step 1: Shrink korrelationsmatricen mod I  (Eq. 13)
+    C_w = (1.0 - w) * C_a + w * np.eye(n)
 
-    # Step 2: Σ_w = (1−w)·Σ + w·diag(Σ)   (Eq. 19)
-    Sigma_d = np.diag(np.diag(Sigma))
-    Sigma_w = (1.0 - w) * Sigma + w * Sigma_d
+    # Step 2: Σ_w = D · C_w · D
+    D       = np.diag(v_a)
+    Sigma_w = D @ C_w @ D
 
-    # Step 3: x = (1/γ) · Σ_w^{-1} · s   (Eq. 20)
+    # Step 3: x = (1/γ) · Σ_w^{-1} · s
     try:
         Sigma_inv = np.linalg.inv(Sigma_w)
     except np.linalg.LinAlgError:
