@@ -85,6 +85,23 @@ def print_correlation_table(corr_matrix: pd.DataFrame, title: str) -> None:
     print("=" * 60)
     print(corr_matrix.to_string())
 
+def print_avg_correlation_table(corr_matrix: pd.DataFrame, title: str) -> None:
+    avg_corr = {
+        col: corr_matrix[col].drop(col).mean()
+        for col in corr_matrix.columns
+    }
+    avg_series = (
+        pd.Series(avg_corr)
+        .sort_values(ascending=False)
+        .reset_index()
+    )
+    avg_series.columns = ["Industri", "Gns. korrelation"]
+
+    print("\n" + "=" * 45)
+    print(f"GENNEMSNITLIG KORRELATION — {title}")
+    print("=" * 45)
+    print(avg_series.to_string(index=False, float_format="{:.3f}".format))
+
 # ── 2) Heatmap (nedre trekant) ─────────────────────────────────────────────────
 
 def plot_lower_triangle_heatmap(corr_matrix: pd.DataFrame, title: str) -> None:
@@ -143,6 +160,7 @@ def run_correlation_analysis(excess_returns: pd.DataFrame,
     print_correlation_table(corr_matrix, label)
     plot_lower_triangle_heatmap(corr_matrix, f"Korrelationsmatrix — {label} (1985–2025)")
     print_top_bottom_correlation_table(corr_matrix, label, n=n)
+    print_avg_correlation_table(corr_matrix, label)  # tilføjet
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -158,8 +176,8 @@ def main():
     daily_excess   = calculate_excess_returns(df_daily, rf_daily)
 
     # Kør analyse for begge frekvenser
-    run_correlation_analysis(monthly_excess, label="Månedlig", n=3)
-    run_correlation_analysis(daily_excess,   label="Daglig",   n=3)
+    run_correlation_analysis(df_monthly, label="Månedlig", n=3)
+    run_correlation_analysis(df_daily,   label="Daglig",   n=3)
 
 if __name__ == "__main__":
     main()
