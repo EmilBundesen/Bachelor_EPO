@@ -396,48 +396,6 @@ def plot_visualizations(monthly_excess, daily, ticker_to_sector,
     plt.tight_layout()
     plt.show()
 
-    # ── Plot 2: Kumuleret afkast pr. sektor ───────────────────
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    # Beregn kumuleret afkast per sektor
-    sector_cum_final = {}
-    sector_cum_series = {}
-    for sector, tickers in sector_groups.items():
-        available = [t for t in tickers if t in full.columns]
-        if not available:
-            continue
-        sector_ret = full[available].mean(axis=1)
-        cum_series = (1 + sector_ret).cumprod() - 1
-        sector_cum_final[sector] = cum_series.iloc[-1]
-        sector_cum_series[sector] = cum_series
-
-    # Top 5 og bund 5
-    sorted_sectors = sorted(sector_cum_final, key=sector_cum_final.get, reverse=True)
-    top5 = sorted_sectors[:5]
-    bottom5 = sorted_sectors[-5:]
-    show = set(top5 + bottom5)
-
-    colors_top = sns.color_palette("Greens_d", 5)
-    colors_bottom = sns.color_palette("Reds_d", 5)
-
-    for i, sector in enumerate(top5):
-        ax.plot(sector_cum_series[sector], label=f"↑ {sector.capitalize()}",
-                linewidth=2, color=colors_top[i])
-
-    for i, sector in enumerate(bottom5):
-        ax.plot(sector_cum_series[sector], label=f"↓ {sector.capitalize()}",
-                linewidth=2, color=colors_bottom[i], linestyle="--")
-
-    ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-    ax.set_title("Kumuleret afkast pr. sektor — top 5 og bund 5 (hele periode, equal-weighted)",
-                 fontsize=13, fontweight="bold")
-    ax.set_ylabel("Kumuleret afkast")
-    ax.set_xlabel("Dato")
-    ax.legend(fontsize=10, ncol=2)
-    plt.tight_layout()
-    plt.show()
-
-
 # ── Gross Exposure ────────────────────────────────────────────
 
 def compute_ge_epo_fixed_w(monthly_excess, xsmom, corr_dict, vols_dict,
@@ -1127,9 +1085,6 @@ def main():
     print("=" * 65)
     print(perf.to_string())
 
-    perf.to_csv("performance_summary_2020_2025.csv")
-    print("\nGemt: performance_summary_2020_2025.csv")
-
     # ── 7. Månedlige afkast 2023-2025: fire strategier ────────
     PERIOD_START = "2023-01-01"
     PERIOD_END   = "2025-12-31"
@@ -1214,7 +1169,7 @@ def main():
         corr_raw=corr_raw,
         vols_raw=vols_raw,
         gamma=GAMMA,
-        backtest_start=START_DATE,
+        backtest_start="2013-01-01",
         end_date=END_DATE,
         roll_window=12
     )
