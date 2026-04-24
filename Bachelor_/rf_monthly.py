@@ -292,6 +292,13 @@ def main():
     plot_cumulative_returns(log_kum_merafkast, top3, bottom3,
                             "Logkumulativt dagligt merafkast (1985–2025)")
 
+    # top og bund fem sektorer
+    top5 = ["Agric", "Insur", "Util", "Guns", "Beer"]
+    bund5 = ["Telcm", "Paper", "Toys", "BusSv", "Fun"]
+    plot_cumulative_returns(kum_merafkast, top5, bund5,
+                            "Kumulativt dagligt merafkast (2010–2025)")
+
+
     # Visualiser korrelation
     plot_correlation_heatmap(correlation_matrix)
 
