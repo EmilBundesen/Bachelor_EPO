@@ -106,7 +106,7 @@ def plot_rolling_ic(monthly_excess, configs, window=12):
     """Viser rullende IC for Equity 4-7 (signal varierer)."""
 
     signal_configs = [c for c in configs if c["name"] in
-                      ["Equity 4", "Equity 5", "Equity 6", "Equity 7"]]
+                      ["Equity 4", "Equity 5", "Equity 6"]]
 
     fig, axes = plt.subplots(len(signal_configs), 1,
                              figsize=(12, 3 * len(signal_configs)),
