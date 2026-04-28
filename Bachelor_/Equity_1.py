@@ -20,18 +20,18 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
 # Konstanter
-DATA_START_DATE     = "1985-01-01"
-BACKTEST_START_DATE = "2010-01-01"
+DATA_START_DATE     = "2010-01-01"
+BACKTEST_START_DATE = "2020-01-01"
 BACKTEST_END_DATE   = "2025-12-31"
 
 LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
-RISK_WINDOW      = 36    # Rolling window for covariance estimation (months)
+RISK_WINDOW      = 24    # Rolling window for covariance estimation (months)
 CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
 GAMMA            = 3     # Risk aversion γ (cancels in Sharpe ratio)
 MIN_VOL          = 1e-8  # Floor on vol to avoid division by zero
 
 CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
-MIN_HISTORY_OOS  = 12
+MIN_HISTORY_OOS  = 6
 PERCENT_TO_DECIMAL   = 100.0
 Missing_values = [-99.99, -999]
 
@@ -106,6 +106,45 @@ def compute_xsmom(monthly_ret: pd.DataFrame,
 
     return out
 
+def compute_tsmom_signal(monthly_ret: pd.DataFrame,
+                         lookback: int = LOOKBACK_MONTHS) -> pd.DataFrame:
+    """
+    TSMOM signal skaleret til unit-leverage (samme interface som compute_xsmom).
+
+    For hver dato t:
+      - Long:  12m afkast > 0  → signal = +|r_i|
+      - Short: 12m afkast < 0  → signal = -|r_i|
+      - Nul:   12m afkast = 0  → signal =  0
+
+    Normalisering: c_t = 1 / max(sum_long, sum_short)
+    så max(brutto_long, brutto_short) = 1  (unit-leverage, Eq. 25-analog).
+    """
+    roll = (monthly_ret
+            .rolling(window=lookback, min_periods=lookback)
+            .sum())
+
+    out = pd.DataFrame(np.nan, index=roll.index, columns=roll.columns)
+
+    for date, row in roll.iterrows():
+        avail = row.dropna()
+        if len(avail) < 2:
+            continue
+
+        signal = pd.Series(0.0, index=avail.index)
+        signal[avail > 0] =  avail[avail > 0]   # long:  positivt afkast
+        signal[avail < 0] =  avail[avail < 0]   # short: negativt afkast
+
+        pos = signal[signal > 0].sum()
+        neg = signal[signal < 0].sum()
+
+        # Kræv begge sider for at undgå rent long/short univers
+        if pos == 0 or neg == 0:
+            continue
+
+        c_t = 1.0 / max(pos, abs(neg))          # unit-leverage normalisering
+        out.loc[date, signal.index] = c_t * signal
+
+    return out
 
 #Risikomodel
 def compute_risk_model(monthly_excess, window=RISK_WINDOW,
@@ -194,6 +233,7 @@ def epo_weights(signal:  pd.Series,
     C     = corr.loc[common, common]
     v     = vols.loc[common]
 
+    # Drop near-zero-vol industries
     ok    = v >= min_vol
     s_vec = s_vec[ok]; v = v[ok]; C = C.loc[ok, ok]
     if len(s_vec) < 2:
@@ -202,16 +242,15 @@ def epo_weights(signal:  pd.Series,
     v_a = v.values
     s_a = s_vec.values
     C_a = C.values
-    n   = len(s_a)
 
-    # Step 1: Shrink korrelationsmatricen mod I  (Eq. 13)
-    C_w = (1.0 - w) * C_a + w * np.eye(n)
+    # Step 1: Σ = D · Ω̃ · D
+    Sigma   = C_a * np.outer(v_a, v_a)
 
-    # Step 2: Σ_w = D · C_w · D
-    D       = np.diag(v_a)
-    Sigma_w = D @ C_w @ D
+    # Step 2: Σ_w = (1−w)·Σ + w·diag(Σ)   (Eq. 19)
+    Sigma_d = np.diag(np.diag(Sigma))
+    Sigma_w = (1.0 - w) * Sigma + w * Sigma_d
 
-    # Step 3: x = (1/γ) · Σ_w^{-1} · s
+    # Step 3: x = (1/γ) · Σ_w^{-1} · s   (Eq. 20)
     try:
         Sigma_inv = np.linalg.inv(Sigma_w)
     except np.linalg.LinAlgError:
@@ -731,6 +770,11 @@ def main():
 
 
     # Her kan der findes vægte på bestemt dag ved funktionen get_weights_at_date
+    result = get_weights_at_date(
+        monthly_excess, xsmom, corr_shrunk, vols, epo_panel,
+        gamma=GAMMA, target_date="2022-12-31", top_n=15
+    )
+    print(result)
     # Eller gennemsnitlige vægte ved funktionen print_avg_epo_weights_year()
 
     print_avg_epo_weights_year(monthly_excess, xsmom, corr_raw, vols_raw,
