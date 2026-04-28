@@ -6,11 +6,11 @@ from pathlib import Path
 from tkinter import Tk, filedialog
 
 #konstanter
-START_DATE = "1985-01-01"
+START_DATE = "2010-01-01"
 END_DATE = "2025-12-31"
 MISSING_VALUES = [-99.99, -999] #fra Kenneth French
 PERCENT_TO_DECIMAL = 100
-TOP_N_INDUSTRIES = 3
+TOP_N_INDUSTRIES = 5
 INDUSTRY_DATA_HEADER_ROW = 5 #fra Kenneth French
 RF_DATA_SKIP_ROWS = 3 #fra Kenneth French
 
@@ -158,7 +158,6 @@ def plot_cumulative_returns(cumulative_returns: pd.DataFrame,
     for industry in bottom_industries:
         plt.plot(cumulative_returns.index, cumulative_returns[industry], label=f"Bottom: {industry}", linestyle='--', linewidth=LINE_WIDTH)
 
-    plt.title(f"{title} – Top {TOP_N_INDUSTRIES} vs. Bottom {TOP_N_INDUSTRIES} industrier")
     plt.xlabel("Date")
     plt.ylabel("Kumulativt merafkast")
     plt.grid(True)
@@ -293,8 +292,8 @@ def main():
                             "Logkumulativt dagligt merafkast (1985–2025)")
 
     # top og bund fem sektorer
-    top5 = ["Agric", "Insur", "Util", "Guns", "Beer"]
-    bund5 = ["Telcm", "Paper", "Toys", "BusSv", "Fun"]
+    top5 = ["Food", "Guns", "Agric", "Drugs", "Beer"]
+    bund5 = ["Softw", "Toys", "Rubbr", "Rtail", "BusSv"]
     plot_cumulative_returns(kum_merafkast, top5, bund5,
                             "Kumulativt dagligt merafkast (2010–2025)")
 
