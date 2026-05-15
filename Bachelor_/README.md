@@ -44,6 +44,23 @@ De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMO
 
 ---
 
+#### Konstanter til genskabelse af Equity 1 fra artiklen
+ 
+For at genskabe den primære konfiguration fra Pedersen, Babu & Levine (2021) skal følgende konstanter sættes øverst i `Equity_1.py`:
+ 
+```python
+DATA_START_DATE     = "1926-07-01"   # Artiklen bruger data fra 1985
+BACKTEST_START_DATE = "1942-01-01"   # OOS-periode som i artiklen
+BACKTEST_END_DATE   = "2018-12-31"   # Tilpas til ønsket slutdato
+ 
+RISK_WINDOW    = 60     # 60-måneders rullende kovariansvindue
+LOOKBACK_MONTHS = 12    # 12-måneders XSMOM signal
+CORR_PRESHRINK  = 0.05  # 5% pre-shrinkage mod identitetsmatrix
+GAMMA           = 3     # Risikoaversion (udlignes i Sharpe-ratio)
+```
+ 
+Signal: `compute_xsmom()` — ingen ændringer nødvendige.
+
 ## Kritisk: Konstanter der skal tilpasses
 
 > **Alle nøgleparametre styres via konstanter øverst i hvert script.** Inden kørsel skal man aktivt tage stilling til hvilken periode, hvilket risikovindue og hvilket signal man ønsker — og justere konstanterne tilsvarende. Dette gælder både `Equity_1.py` og de scripts, der kalder visualiseringer og backtests baseret på samme parametre.
