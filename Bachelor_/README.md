@@ -1,136 +1,236 @@
-# Bachelorprojekt — Enhanced Portfolio Optimisation (EPO)
+# Bachelor — EPO-baseret porteføljeoptimering med momentumsignaler
 
-Implementering af **Enhanced Portfolio Optimisation (EPO)** metoden fra Pedersen, Babu & Levine (2021), anvendt på Fama-French 49 industrier og individuelle aktier fra Yahoo Finance.
-
----
-
-## Filstruktur
-
-| Fil | Beskrivelse |
-|-----|-------------|
-| `Equity_1.py` | Kerne-EPO implementering på Fama-French 49 industri-data |
-| `equity_genskabning.py` | Kører Equity 1–8 robusthedskonfigurationer (varierende risikovindue, signal og anker) |
-| `moment_mod_EPO_ind.py` | EPO vs. TSMOM Vol vs. TSMOM EW over tre delperioder (FF49-data) |
-| `Signal_Visual.py` | Rullende volatilitet og XS-momentum signal-plots (FF49-data) |
-| `SIC_koder.py` | Universkonstruktion — finder top-N aktier per sektor via markedskapitalisering og SEC EDGAR |
-| `Best_stocks_from_industry.py` | Henter aktiedata fra Yahoo Finance for det valgte univers og gemmer lokalt |
-| `Stock_Data.py` | EPO-backtest på enkeltaktier inkl. transaktionsomkostningsanalyse |
-| `Moment_mod_EPO_stock.py` | EPO vs. TSMOM på Yahoo Finance-aktier (2020–2025) |
-| `Investeringsomkostninger.py` | Turnover- og netto-afkastberegninger (importeres af Stock_Data.py) |
+Implementering af **Eigenvalue-Cleaned Portfolio Optimization (EPO)** fra Pedersen, Babu & Levine (2021), anvendt på industri- og aktieporteføljer med cross-sectional momentum (XSMOM) og time-series momentum (TSMOM) som signaler.
 
 ---
 
-## Datakrav
+## Projektstruktur og rollefordeling
 
-### Fama-French data (bruges af Equity_1, equity_genskabning, moment_mod_EPO_ind, Signal_Visual)
-
-Download fra [Kenneth Frenchs datalibrary](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html) og placer filerne på følgende stier:
+Koden er organiseret sådan, at **`Equity_1.py` udgør kernen** — alle centrale EPO-funktioner er implementeret her og genbruges i de øvrige filer. De andre scripts udvider, visualiserer eller anvender disse funktioner på nye datasæt og konfigurationer.
 
 ```
-/Users/<dit navn>/Desktop/Bachelor/Data/49_Industry_monthly.csv   # 49 Industry Portfolios (månedlige, value-weighted)
-/Users/<dit navn>/Desktop/Bachelor/Data/Månedlig_rf.csv           # Fama-French faktorer (månedlig risikofri rente)
+Bachelor_/
+│
+├── Data/                               # Oprettes manuelt — se nedenfor
+│   ├── 49_Industry_monthly.csv         # Kenneth French — månedlige industrier
+│   ├── 49_Industry_Portfolios_Daily.csv  # Kenneth French — daglige industrier
+│   └── Månedlig_rf.csv                 # Fama-French risikofri rente
+│
+├── Equity_1.py          ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
+├── equity_genskabning.py   Robusthedstest: 8 Equity-konfigurationer med varierende
+│                           risikovindue, signalvindue, signaltype og optimeringsmetode
+├── Stock_Data.py           Udvider Equity_1 til enkeltaktier (Yahoo Finance):
+│                           TSMOM-signal, buy-and-hold, årlig rebalancering, gearing
+├── Signal_Visual.py        Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
+├── Best_stocks_from_industry.py  Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
+├── Get_stock_data.py       Datahentning: kompakt variant af ovenstående
+├── SIC koder.py            Bygger aktieunivers via SEC EDGAR + market cap-filter
+├── Sammensat.py            Eksplorativ analyse: daglige merafkast og korrelationer
+└── rf_monthly.py           Tidlig analyse: rf-konvertering, kumulativt afkast
 ```
 
-> Stierne er hardcoded i `Equity_1.py` og `Signal_Visual.py`. Opdatér dem hvis din mappestruktur er anderledes.
+### Hvad er implementeret i Equity_1.py
 
-### Yahoo Finance aktiedata (bruges af Stock_Data, Moment_mod_EPO_stock)
+`Equity_1.py` indeholder alle byggeklodser til EPO-analysen:
 
-Genereres lokalt ved at køre `Best_stocks_from_industry.py` (se trin 2 nedenfor). Ingen manuel download nødvendig.
+- **`get_monthly_return()` / `get_monthly_risk()`** — dataindlæsning og rensning
+- **`compute_xsmom()`** — XSMOM-signal (lign. 24–25): kumuleret afkast over `LOOKBACK_MONTHS`, demeanet og normaliseret til unit-leverage
+- **`compute_risk_model()`** — rullende kovariansmatrix med pre-shrinkage mod identitetsmatrix: `Σ_θ = (1−θ)Σ + θI`
+- **`epo_weights()`** — EPO-vægte: `x = (1/γ) Σ_w⁻¹ s`, hvor `Σ_w = (1−w)Σ + w·diag(Σ)` (lign. 19–20)
+- **`build_epo_panel()`** — beregner EPO-portefølje for alle kandidat-w-værdier
+- **`build_dynamic_oos_epo()`** — vælger w dynamisk out-of-sample via rullende Sharpe-maksimering
+- **`backtest_indmom()`** — INDMOM-benchmark (signal direkte som vægte, ingen kovariansoptimering)
+- **`backtest_equal_weight()`** — 1/N-benchmark
+- **`backtest_mvo_no_shrink()`** — MVO uden shrinkage (θ=0, w=0)
+
+De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMOM-signal og forankret EPO (`epo_anchored_weights`); `Stock_Data.py` tilføjer alle elementer, som er nødvendige for at implementere EPO i aktieuniverset. Dvs. vi tilføjer simple momentum long/short, buy-and-hold og årlig rebalancering.
 
 ---
 
-## Sådan køres koden
+## Kritisk: Konstanter der skal tilpasses
 
-### Trin 1 — Installér afhængigheder
+> **Alle nøgleparametre styres via konstanter øverst i hvert script.** Inden kørsel skal man aktivt tage stilling til hvilken periode, hvilket risikovindue og hvilket signal man ønsker — og justere konstanterne tilsvarende. Dette gælder både `Equity_1.py` og de scripts, der kalder visualiseringer og backtests baseret på samme parametre.
+
+### Konstanter i `Equity_1.py`
+
+```python
+# ── Tidsperiode ──────────────────────────────────────────────
+DATA_START_DATE     = "2010-01-01"   # Hvorfra data indlæses
+BACKTEST_START_DATE = "2020-01-01"   # OOS-periodens start
+BACKTEST_END_DATE   = "2025-12-31"   # OOS-periodens slut
+
+# ── Risikomodel ──────────────────────────────────────────────
+RISK_WINDOW      = 24    # Rullende vindue for kovariansestimering (måneder)
+                         # Equity 1: 60m | Equity 2: 36m | Equity 3+: 24m
+CORR_PRESHRINK   = 0.05  # θ: pre-shrinkage af korrelationer mod identitetsmatrix
+
+# ── Signal ───────────────────────────────────────────────────
+LOOKBACK_MONTHS  = 12    # XSMOM/TSMOM lookback (måneder)
+                         # Equity 3: 12m | Equity 4: 24m | Equity 5: 6m | Equity 6: 3m
+
+# ── EPO ──────────────────────────────────────────────────────
+GAMMA            = 3
+CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
+MIN_HISTORY_OOS  = 6     # Minimum IS-måneder til dynamisk w-valg
+```
+
+Disse konstanter bruges direkte i alle centrale beregninger. Visualiseringsscripts som `Signal_Visual.py` har deres egne tilsvarende konstanter øverst — disse skal matche det ønskede setup.
+
+### Equity-konfigurationer fra opgaven
+
+Opgaven analyserer 8 konfigurationer med varierende risikovindue, signalvindue, signaltype og optimeringsmetode. For at genskabe en specifik konfiguration i `Equity_1.py` justeres konstanterne således:
+
+| Navn | `RISK_WINDOW` | `LOOKBACK_MONTHS` | Signal | Metode |
+|------|:---:|:---:|--------|--------|
+| Equity 1 | 60 | 12 | XSMOM | Simpel EPO |
+| Equity 2 | 36 | 12 | XSMOM | Simpel EPO |
+| Equity 3 | 24 | 12 | XSMOM | Simpel EPO |
+| Equity 4 | 24 | 24 | XSMOM | Simpel EPO |
+| Equity 5 | 24 |  6 | XSMOM | Simpel EPO |
+| Equity 6 | 24 |  3 | XSMOM | Simpel EPO |
+| Equity 7 | 24 | 12 | TSMOM | Simpel EPO — skift til `compute_tsmom_signal()` |
+| Equity 8 | 24 | 12 | XSMOM | Forankret EPO — brug `epo_anchored_weights()` fra `equity_genskabning.py` |
+
+`equity_genskabning.py` kører alle 8 automatisk via en `EQUITY_CONFIGS`-liste og kræver ingen manuelle konstantændringer pr. konfiguration.
+
+### Filstier skal opdateres
+
+Alle scripts har hardkodede absolutte stier. Søg og erstat `/Users/emilbundesen/Desktop/Bachelor/` med din egen rodmappe:
+
+```python
+# Eksempel i Equity_1.py
+df = pd.read_csv(
+    "/din/sti/Data/49_Industry_monthly.csv",   # <-- tilpas
+    sep=",", header=6
+)
+```
+
+Scripts med hardkodede stier: `Equity_1.py`, `equity_genskabning.py`, `Sammensat.py`, `rf_monthly.py`, `Signal_Visual.py`.
+
+---
+
+## Opsætning
+
+### Krav
 
 ```bash
-pip install yfinance pandas numpy matplotlib seaborn requests tqdm pyarrow
+pip install numpy pandas matplotlib seaborn scipy yfinance tqdm requests
 ```
 
-### Trin 2 — Hent aktiedata fra Yahoo Finance
+Python 3.10+ anbefales.
 
-Skal kun køres én gang (eller når data skal opdateres).
+### Data
 
-```bash
-python Best_stocks_from_industry.py
-```
+Hent følgende filer fra [Kenneth French's hjemmeside](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html):
 
-Henter daglige priser og afkast for det 20-sektor aktieuniverset (2010–2025) og gemmer:
-- `data_daily_returns.parquet`
-- `data_daily_prices.parquet`
-- `data_ticker_sector.csv`
+| Fil | Indhold | Header-linje |
+|-----|---------|:---:|
+| `49_Industry_monthly.csv` | Månedlige value-weighted industri-afkast | 6 |
+| `49_Industry_Portfolios_Daily.csv` | Daglige afkast, 49 industrier | 5 |
+| `Månedlig_rf.csv` | Fama-French faktorer — RF-kolonnen bruges | skip 3 |
 
-> Aktieuniverset er fastlagt ved hjælp af `SIC_koder.py`, som identificerer de 15 største selskaber (markedskapitalisering pr. 31-12-2022) i hver af de 29 Fama-French sektorer via SEC EDGAR. De resulterende tickers er hardcoded i `Best_stocks_from_industry.py`.
+---
 
-### Trin 3 — Kør EPO-analysen på industriniveau (FF49-data)
+## Kørsel
+
+### Primær analyse — industrier
 
 ```bash
 python Equity_1.py
 ```
 
-Udskriver en performancetabel (Sharpe-ratio) for EPO over alle shrinkage-parametre `w ∈ {0%, 10%, 25%, 50%, 75%, 90%, 99%, 100%}` samt INDMOM, MVO og 1/N benchmarks for OOS-perioden.
+Udfører komplet backtest og printer performance-tabel, EPO-panel for alle `CANDIDATE_WS`, dynamisk OOS EPO og porteføljevægte. Tilpas `BACKTEST_START_DATE`, `RISK_WINDOW` og `LOOKBACK_MONTHS` til den ønskede konfiguration inden kørsel.
 
-### Trin 4 — Kør robusthedstjek (Equity 1–8)
+### Robusthedsanalyse — alle 8 Equity-konfigurationer
 
 ```bash
 python equity_genskabning.py
 ```
 
-Kører otte konfigurationer med varierende risikovindue (24m/36m/60m), signal-lookback (3m/6m/12m/24m), signaltype (XSMOM/TSMOM) og porteføljeanker. Udskriver en samlet Sharpe-ratio tabel.
+Kører samtlige konfigurationer automatisk og producerer plots af rullende IC og gennemsnitlig korrelation pr. konfiguration. Ingen manuelle konstantændringer nødvendige.
 
-### Trin 5 — EPO vs. TSMOM dekomponering (FF49-data)
-
-```bash
-python moment_mod_EPO_ind.py
-```
-
-Sammenligner EPO w=0.75, TSMOM Vol-skaleret og TSMOM Equal-Weighted med samme signal. Isolerer bidraget fra korrelationsshrinkage. Gemmer plottene `epo_vs_tsmom_full.png` og `epo_vs_tsmom_subperiods.png`.
-
-### Trin 6 — EPO-backtest på enkeltaktier
-
-```bash
-python Stock_Data.py
-```
-
-Kører det fulde EPO-backtest på enkeltaktier (OOS 2020–2025), inklusiv:
-- Sammenligning af månedlig og årlig rebalancering
-- Transaktionsomkostningsfølsomhedsanalyse
-- Leverage-justeret performancetabel
-- Gemmer `performance_summary_2020_2025.csv`
-
-### Trin 7 — EPO vs. TSMOM på aktier (2020–2025)
-
-```bash
-python Moment_mod_EPO_stock.py
-```
-
-Sammenligner EPO w=0.75 mod TSMOM Vol-skaleret, TSMOM EW og TSMOM Long/Short på Yahoo Finance-aktieuniverset. Gemmer plottet `epo_vs_tsmom_yf_2023_2025.png`.
-
-### Trin 8 — Signalvisualisering (valgfrit)
+### Visualiseringer
 
 ```bash
 python Signal_Visual.py
 ```
 
-Plotter rullende volatilitet og XS-momentum signal for de 10 mest volatile FF49 industrier.
+Producerer tre plots:
 
----
+1. Rullende annualiseret volatilitet for de N mest volatile industrier
+2. XSMOM-signalværdier over tid
+3. Rullende månedlig turnover: MVO vs. EPO med udvalgte w-værdier
 
-## Universkonstruktion (reference)
+Konstanterne øverst i `Signal_Visual.py` (`RISK_WINDOW`, `LOOKBACK_MONTHS`, `BACKTEST_START_DATE`, outputstier) skal matche den konfiguration, man ønsker at visualisere. Plots gemmes som PNG-filer på den hardkodede sti — tilpas den inden kørsel.
 
-Aktieuniverset er konstrueret med `SIC_koder.py`:
+### Enkeltaktier — Yahoo Finance-univers
+
+**Trin 1:** Hent aktiedata (køres kun én gang eller ved dataopdatering):
 
 ```bash
-python SIC_koder.py
+python Best_stocks_from_industry.py
 ```
 
-Scriptet forespørger SEC EDGAR for alle NYSE/Nasdaq-noterede selskaber, mapper dem til Fama-French 49 sektorer via SIC-koder og vælger de 15 største målt på markedskapitalisering pr. 31-12-2022 per sektor. Outputtet printes som en Python-dict og er hardcoded ind i `Best_stocks_from_industry.py`. Dette trin behøver ikke køres igen, medmindre universet skal revideres.
+Gemmer tre filer i arbejdsmappen:
+```
+data_daily_returns.parquet
+data_daily_prices.parquet
+data_ticker_sector.csv
+```
+
+Sektor-universet defineres i `sectors`-dict'en øverst i filen. Filen indeholder flere kommenterede konfigurationer svarende til forskellige risikovinduer og perioder fra opgaven — vælg den relevante og fjern kommentarerne.
+
+**Trin 2:** Kør backtest:
+
+```bash
+python Stock_Data.py
+```
+
+Ud over de sædvanlige EPO-strategier implementerer `Stock_Data.py`:
+
+- **TSMOM** (sektor-neutraliseret time-series momentum) som alternativt signal
+- **Simple momentum** (long top-N / short bottom-N) uden porteføljeoptimering
+- **Buy-and-hold** — vægte fryses ved `signal_date` og holdes uændret hele perioden
+- **Månedlig / årlig rebalancering** — direkte sammenligning af rebalanceringsfrekvenser
+- **Leverage-skalering** — normaliserer strategier til samme brutto-eksponering (gross exposure)
+
+Konstanter for periode, signal og risikovindue øverst i `Stock_Data.py` skal matche de valg, der er truffet i `Best_stocks_from_industry.py`.
+
+### Byg aktieunivers via SEC EDGAR (valgfrit)
+
+```bash
+python "SIC koder.py"
+```
+
+Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier pr. sektor med størst market cap pr. `MARKET_CAP_DATE`. Output er en Python-dict klar til indsætning i `Best_stocks_from_industry.py`. Resultater caches i `sec_universe_cache.csv` for at undgå gentagne API-kald.
 
 ---
 
-## Metodiske noter
+## Metodeoversigt
 
-- Alle backtests bruger **merafkast** (råafkast minus månedlig risikofri rente).
-- EPO-signalet er **XSMOM** (cross-sectional momentum, lign. 24–25 i Pedersen et al.) for industrianalysen og **TSMOM** (time-series momentum) for aktieanalysen.
-- Risikomodellen bruger en rullende kovariansestimator med 5% pre-shrinkage af korrelationsmatricen mod identitetsmatricen (θ = 0,05).
-- Shrinkage-parameteren `w` blander den fulde kovariansmatrix mod dens diagonal: `w = 0` svarer til standard MVO, `w = 1` svarer til vol-skaleret (INDMOM-anker).
+| Komponent | Formel | Styres af |
+|-----------|--------|-----------|
+| XSMOM | Kumuleret afkast, demeanet, unit-leverage normaliseret (lign. 24–25) | `LOOKBACK_MONTHS` |
+| TSMOM | Sektor-neutraliseret time-series momentum | `LOOKBACK_MONTHS` |
+| Risikomodel | `Σ_θ = (1−θ)Σ + θI` — rullende kovarians med pre-shrinkage | `RISK_WINDOW`, `CORR_PRESHRINK` |
+| Simpel EPO | `x = (1/γ) Σ_w⁻¹ s`, `Σ_w = (1−w)Σ + w·diag(Σ)` (lign. 19–20) | `GAMMA`, `CANDIDATE_WS` |
+| Forankret EPO | `EPO_a(w) = Σ_w⁻¹ [(1−w)κs + wVa]` — 1/N som anker (lign. 27–30) | `CANDIDATE_WS` |
+| Dynamisk w | OOS Sharpe-maksimering over `CANDIDATE_WS` | `MIN_HISTORY_OOS` |
+
+---
+
+## Kendte begrænsninger
+
+- **Hardkodede stier** — skal opdateres lokalt i alle scripts.
+- **Look-ahead bias** er aktivt undgået: signal og risikomodel bruger udelukkende data fra *inden* porteføljemåneden. Verificér tidsflowet med `visualize_date_flow_simple()` i `Stock_Data.py`.
+- **Transaktionsomkostninger** er ikke modelleret — rapporterede Sharpe-ratioer er brutto.
+- `SIC koder.py` kan fejle ved SEC EDGAR rate-limiting — brug den cachede CSV ved gentagende kørsel.
+- Yahoo Finance-data filtreres automatisk: tickers med mere end 20% (industrier) eller 35% (enkeltaktier) manglende data frasorteres.
+
+---
+
+## Referencer
+
+Pedersen, L. H., Babu, A., & Levine, A. (2021). *Enhanced Portfolio Optimization*. Financial Analysts Journal, 77(2), 124–151.
+
+Kenneth French Data Library: [https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html](https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html)
