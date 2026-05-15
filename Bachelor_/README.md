@@ -16,17 +16,14 @@ Bachelor_/
 │   ├── 49_Industry_Portfolios_Daily.csv  # Kenneth French — daglige industrier
 │   └── Månedlig_rf.csv                 # Fama-French risikofri rente
 │
-├── Equity_1.py          ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
-├── equity_genskabning.py   Robusthedstest: 8 Equity-konfigurationer med varierende
-│                           risikovindue, signalvindue, signaltype og optimeringsmetode
-├── Stock_Data.py           Udvider Equity_1 til enkeltaktier (Yahoo Finance):
-│                           TSMOM-signal, buy-and-hold, årlig rebalancering, gearing
-├── Signal_Visual.py        Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
-├── Best_stocks_from_industry.py  Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
-├── Get_stock_data.py       Datahentning: kompakt variant af ovenstående
-├── SIC koder.py            Bygger aktieunivers via SEC EDGAR + market cap-filter
-├── Sammensat.py            Eksplorativ analyse: daglige merafkast og korrelationer
-└── rf_monthly.py           Tidlig analyse: rf-konvertering, kumulativt afkast
+├── Equity_1.py                         ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
+├── equity_genskabning.py               Robusthedstest: 8 Equity-konfigurationer med varierende
+│                                       risikovindue, signalvindue, signaltype og optimeringsmetode
+├── Stock_Data.py                       Udvider Equity_1 til enkeltaktier (Yahoo Finance):
+│                                       TSMOM-signal, buy-and-hold, årlig rebalancering, gearing
+├── Signal_Visual.py                    Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
+├── Best_stocks_from_industry.py        Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
+└── SIC koder.py                        Bygger aktieunivers via SEC EDGAR + market cap-filter
 ```
 
 ### Hvad er implementeret i Equity_1.py
