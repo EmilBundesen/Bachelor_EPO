@@ -49,9 +49,9 @@ De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMO
 For at genskabe den primære konfiguration fra Pedersen, Babu & Levine (2021) skal følgende konstanter sættes øverst i `Equity_1.py`:
  
 ```python
-DATA_START_DATE     = "1926-07-01"   # Artiklen bruger data fra 1985
+DATA_START_DATE     = "1926-07-01"   
 BACKTEST_START_DATE = "1942-01-01"   # OOS-periode som i artiklen
-BACKTEST_END_DATE   = "2018-12-31"   # Tilpas til ønsket slutdato
+BACKTEST_END_DATE   = "2018-12-31"   
  
 RISK_WINDOW    = 60     # 60-måneders rullende kovariansvindue
 LOOKBACK_MONTHS = 12    # 12-måneders XSMOM signal
