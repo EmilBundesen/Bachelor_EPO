@@ -1,6 +1,6 @@
-# Bachelor — EPO-baseret porteføljeoptimering med momentumsignaler
+# Bachelor — EPO
 
-Implementering af **Eigenvalue-Cleaned Portfolio Optimization (EPO)** fra Pedersen, Babu & Levine (2021), anvendt på industri- og aktieporteføljer med cross-sectional momentum (XSMOM) og time-series momentum (TSMOM) som signaler.
+Implementering af **Enhanced Portfolio Optimization (EPO)** fra Pedersen med flere (2021), anvendt på industri- og aktieporteføljer med cross-sectional momentum (XSMOM) og time-series momentum (TSMOM) som signaler.
 
 ---
 
