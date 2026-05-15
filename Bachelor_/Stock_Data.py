@@ -22,12 +22,16 @@ from Equity_1 import (
     get_weights_at_date
 )
 
-from Get_stock_data import DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR_PATH
+from Best_stocks_from_industry import DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR_PATH
 
-from Signal_Visual import (
+from Investeringsomkostninger import (
+    compute_turnover_series,
+    compute_turnover_annual_rebalance,
+    print_turnover_stats,
     plot_turnover,
-    compute_turnover_series
-)
+    compute_net_returns,
+    plot_net_cumulative_vs_cost
+    )
 
 START_DATE        = "2010-01-01"
 END_DATE          = "2025-12-31"
@@ -1041,6 +1045,9 @@ def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
               f"{perf['Ann. Vol']:>10.4f} {perf['Sharpe']:>8.4f}")
     print("=" * (10 + col_w * len(names)))
 
+
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -1156,6 +1163,8 @@ def main():
         start=PERIOD_START, end=PERIOD_END
     )
 
+
+
     # 1/N
     ew = subset(én_over_N, PERIOD_START, PERIOD_END)
     ew.name = "1/N (Equal Weight)"
@@ -1171,6 +1180,20 @@ def main():
         start=PERIOD_START,
         end=PERIOD_END
     )
+
+    plot_net_cumulative_vs_cost(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, start="2023-01-01", end="2025-12-31", w=0.75
+    )
+
+    # ── Transaktionsomkostninger ──────────────────────────────
+    for c in [0.001, 0.005, 0.010]:  # 10bp, 50bp, 100bp
+        compute_net_returns(
+            monthly_excess, xsmom, corr_shrunk, vols,
+            corr_raw, vols_raw, gamma=GAMMA,
+            start="2023-01-01", end="2025-12-31",
+            w=0.75, c=c
+        )
 
     # ── 7b. Leverage-skalerede årlige afkast 2023-2025 ────────
     # EPO w=0.75 har gns. GE = 176% → skalér til 100% GE

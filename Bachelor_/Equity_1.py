@@ -20,20 +20,20 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
 # Konstanter
-DATA_START_DATE     = "2010-01-01"
+DATA_START_DATE     = "1980-01-01"
 BACKTEST_START_DATE = "2020-01-01"
 BACKTEST_END_DATE   = "2025-12-31"
 
 LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
 RISK_WINDOW      = 24    # Rolling window for covariance estimation (months)
 CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
-GAMMA            = 3     # Risk aversion γ (cancels in Sharpe ratio)
+GAMMA            = 3   # Risk aversion γ (cancels in Sharpe ratio)
 MIN_VOL          = 1e-8  # Floor on vol to avoid division by zero
 
 CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
 MIN_HISTORY_OOS  = 6
 PERCENT_TO_DECIMAL   = 100.0
-Missing_values = [-99.99, -999]
+MISSING_VALUES = [-99.99, -999]
 
 #Dataindlæsning - månedlig
 def get_monthly_return() -> pd.DataFrame:
@@ -50,7 +50,7 @@ def get_monthly_return() -> pd.DataFrame:
     df = df.set_index("Date")
 
     df = df.apply(pd.to_numeric, errors="coerce")
-    df.replace(Missing_values, np.nan, inplace=True)
+    df.replace(MISSING_VALUES, np.nan, inplace=True)
     df = df.sort_index()
     df = df.loc[DATA_START_DATE:BACKTEST_END_DATE]
     df = df[~df.index.duplicated(keep="first")]

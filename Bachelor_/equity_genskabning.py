@@ -15,7 +15,7 @@ CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
 GAMMA = 3
 MIN_HISTORY_OOS  = 1
 PERCENT_TO_DECIMAL   = 100.0
-Missing_values = [-99.99, -999]
+MISSING_VALUES = [-99.99, -999]
 
 from Equity_1 import (
     get_monthly_return,

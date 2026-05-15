@@ -12,3 +12,12 @@ __pycache__/
 # MacOS metadata
 .DS_Store
 
+# Generated data files
+*.parquet
+sic_cache.csv
+performance_summary*.csv
+data_ticker_sector.csv
+
+# Generated output plots
+*.png
+

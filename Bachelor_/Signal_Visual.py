@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 # ── Konstanter ────────────────────────────────────────────────────────────────
-DATA_START_DATE    = "1984-01-01"
-PLOT_START_DATE    = "1985-01-01"
+DATA_START_DATE    = "1985-01-01"
+PLOT_START_DATE    = "2010-01-01"
 END_DATE           = "2025-12-31"
 MISSING_VALUES     = [-99.99, -999]
 PERCENT_TO_DECIMAL = 100
@@ -13,7 +13,11 @@ LOOKBACK_MONTHS    = 12
 TOP_N_VOLATILE     = 10
 VOL_WINDOW         = 12  # måneder til rullende volatilitet
 
-from Equity_1 import compute_risk_model, GAMMA, RISK_WINDOW, CORR_PRESHRINK
+from Equity_1 import (
+    compute_risk_model,
+    GAMMA,
+    RISK_WINDOW,
+    CORR_PRESHRINK)
 
 # ── Datahentning ──────────────────────────────────────────────────────────────
 def get_monthly_return() -> pd.DataFrame:
