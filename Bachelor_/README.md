@@ -11,19 +11,19 @@ Koden er organiseret sådan, at **`Equity_1.py` udgør kernen** — alle central
 ```
 Bachelor_/
 │
-├── Data/                               # Oprettes manuelt — se nedenfor
-│   ├── 49_Industry_monthly.csv         # Kenneth French — månedlige industrier
+├── Data/                                 # Oprettes manuelt — se nedenfor
+│   ├── 49_Industry_monthly.csv           # Kenneth French — månedlige industrier
 │   ├── 49_Industry_Portfolios_Daily.csv  # Kenneth French — daglige industrier
-│   └── Månedlig_rf.csv                 # Fama-French risikofri rente
+│   └── Månedlig_rf.csv                   # Fama-French risikofri rente
 │
-├── Equity_1.py                         ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
-├── equity_genskabning.py               Robusthedstest: 8 Equity-konfigurationer med varierende
-│                                       risikovindue, signalvindue, signaltype og optimeringsmetode
-├── Stock_Data.py                       Udvider Equity_1 til enkeltaktier (Yahoo Finance):
-│                                       TSMOM-signal, buy-and-hold, årlig rebalancering, gearing
-├── Signal_Visual.py                    Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
-├── Best_stocks_from_industry.py        Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
-└── SIC koder.py                        Bygger aktieunivers via SEC EDGAR + market cap-filter
+├── Equity_1.py                           ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
+├── equity_genskabning.py                 Robusthedstest: 8 Equity-konfigurationer med varierende risikovindue, signalvindue, signaltype og
+                                          optimeringsmetode
+├── Stock_Data.py                         Udvider Equity_1 til enkeltaktier (Yahoo Finance): TSMOM-signal, buy-and-hold, årlig rebalancering,
+                                          gearing
+├── Signal_Visual.py                      Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
+├── Best_stocks_from_industry.py          Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
+└── SIC koder.py                          Bygger aktieunivers via SEC EDGAR + market cap-filter
 ```
 
 ### Hvad er implementeret i Equity_1.py
