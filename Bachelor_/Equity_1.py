@@ -16,19 +16,18 @@ Data:
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mtick
+
 
 # Konstanter
-DATA_START_DATE     = "1980-01-01"
-BACKTEST_START_DATE = "2020-01-01"
-BACKTEST_END_DATE   = "2025-12-31"
+DATA_START_DATE = "1926-07-01"  #
+BACKTEST_START_DATE = "1942-01-01"  # OOS-periode som i artiklen
+BACKTEST_END_DATE = "2018-12-31"  # Tilpas til ønsket slutdato
 
-LOOKBACK_MONTHS  = 12    # XSMOM signal lookback (Eq. 24)
-RISK_WINDOW      = 24    # Rolling window for covariance estimation (months)
-CORR_PRESHRINK   = 0.05  # θ: 5% pre-shrinkage toward I (Table 1, Equity 1)
-GAMMA            = 3   # Risk aversion γ (cancels in Sharpe ratio)
-MIN_VOL          = 1e-8  # Floor on vol to avoid division by zero
+RISK_WINDOW = 60  # 60-måneders rullende kovariansvindue
+LOOKBACK_MONTHS = 12  # 12-måneders XSMOM signal
+CORR_PRESHRINK = 0.05  # 5% pre-shrinkage mod identitetsmatrix
+GAMMA = 3  # Risikoaversion (udlignes i Sharpe-ratio)
+MIN_VOL = 0.00000001
 
 CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
 MIN_HISTORY_OOS  = 6
@@ -742,7 +741,7 @@ def main():
 
     #XSMOM signal  (uses raw % returns for the cumulative sum, then excess returns are only needed for the covariance estimation)
     xsmom = compute_xsmom(monthly_excess, LOOKBACK_MONTHS)
-    verify_xsmom(xsmom, monthly_excess)
+    ## verify_xsmom(xsmom, monthly_excess)
 
 
     #risikomodel
@@ -768,8 +767,8 @@ def main():
         monthly_excess, xsmom, corr_shrunk, vols, GAMMA, CANDIDATE_WS)
     print(f"  Panel shape: {epo_panel.shape}")
 
-
-    # Her kan der findes vægte på bestemt dag ved funktionen get_weights_at_date
+    """
+    Her kan der findes vægte på bestemt dag ved funktionen get_weights_at_date
     result = get_weights_at_date(
         monthly_excess, xsmom, corr_shrunk, vols, epo_panel,
         gamma=GAMMA, target_date="2022-12-31", top_n=15
@@ -779,6 +778,7 @@ def main():
 
     print_avg_epo_weights_year(monthly_excess, xsmom, corr_raw, vols_raw,
     epo_panel, GAMMA, start = "2022-01-01", end = "2022-12-31", top_n = 10)
+    """
 
     #Dynamisk EPO
     print("\nBuilding dynamic OOS EPO …")
