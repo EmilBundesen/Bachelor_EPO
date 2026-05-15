@@ -192,7 +192,6 @@ data_daily_prices.parquet
 data_ticker_sector.csv
 ```
 
-Sektor-universet defineres i `sectors`-dict'en øverst i filen. Filen indeholder flere kommenterede konfigurationer svarende til forskellige risikovinduer og perioder fra opgaven — vælg den relevante og fjern kommentarerne.
 
 **Trin 2:** Kør backtest:
 
@@ -216,7 +215,12 @@ Konstanter for periode, signal og risikovindue øverst i `Stock_Data.py` skal ma
 python "SIC koder.py"
 ```
 
-Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier pr. sektor med størst market cap pr. `MARKET_CAP_DATE`. Output er en Python-dict klar til indsætning i `Best_stocks_from_industry.py`. Resultater caches i `sec_universe_cache.csv` for at undgå gentagne API-kald.
+Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier pr. sektor med størst market cap pr. `MARKET_CAP_DATE`. Output er en Python-dict klar til indsætning i `Best_stocks_from_industry.py`. Resultater caches i `sec_universe_cache.csv` for at undgå gentagne API-kald. 
+
+De udvalgte sektorer skrives i dict: WANTED_SECTORS. Disse sektorer er fundet ved funktionen **print_avg_epo_weights_year** fra Equity_1 med parametrene: 
+DATA_START_DATE     = "1985-01-01"   # Hvorfra data indlæses
+BACKTEST_START_DATE = "2010-01-01"   # OOS-periodens start
+BACKTEST_END_DATE   = "2022-12-31"   # OOS-periodens slut
 
 ---
 
