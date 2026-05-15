@@ -672,58 +672,6 @@ def print_avg_epo_weights_year(monthly_excess, xsmom, corr_dict, vols_dict,
     return weights_df
 
 
-def compute_elo_scores(rolling_weights: pd.DataFrame, n: int = 5) -> pd.DataFrame:
-    """
-    Beregner ELO-inspireret score per industri baseret på:
-      1) Antal gange industrien optræder i top-n long/short
-      2) Hvilken rank de har fået (rank 1 = højest score)
-
-    Scoren per observation = n - rank + 1
-    (rank 1 → n point, rank 2 → n-1 point, ..., rank n → 1 point)
-
-    Returnerer DataFrame med long_score, short_score, long_appearances,
-    short_appearances sorteret efter long_score descending.
-    """
-    long_scores  = {}
-    short_scores = {}
-    long_app     = {}
-    short_app    = {}
-
-    for date, row in rolling_weights.iterrows():
-        avail = row.dropna()
-        if len(avail) < n * 2:
-            continue
-
-        top_n    = avail.nlargest(n)
-        bottom_n = avail.nsmallest(n)
-
-        for rank, ticker in enumerate(top_n.index, 1):
-            score = n - rank + 1
-            long_scores[ticker] = long_scores.get(ticker, 0) + score
-            long_app[ticker]    = long_app.get(ticker, 0) + 1
-
-        for rank, ticker in enumerate(bottom_n.index, 1):
-            score = n - rank + 1
-            short_scores[ticker] = short_scores.get(ticker, 0) + score
-            short_app[ticker]    = short_app.get(ticker, 0) + 1
-
-    all_tickers = set(long_scores) | set(short_scores)
-    rows = []
-    for ticker in all_tickers:
-        rows.append({
-            "Industri":          ticker,
-            "Long score":        long_scores.get(ticker, 0),
-            "Long optræden":     long_app.get(ticker, 0),
-            "Short score":       short_scores.get(ticker, 0),
-            "Short optræden":    short_app.get(ticker, 0),
-        })
-
-    df = (pd.DataFrame(rows)
-            .set_index("Industri")
-            .sort_values("Long score", ascending=False))
-
-    return df
-
 #Main
 def main():
     print("\n" + "=" * 65)
