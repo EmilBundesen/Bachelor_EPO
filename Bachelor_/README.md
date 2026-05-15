@@ -75,12 +75,10 @@ BACKTEST_END_DATE   = "2025-12-31"   # OOS-periodens slut
 
 # ── Risikomodel ──────────────────────────────────────────────
 RISK_WINDOW      = 24    # Rullende vindue for kovariansestimering (måneder)
-                         # Equity 1: 60m | Equity 2: 36m | Equity 3+: 24m
 CORR_PRESHRINK   = 0.05  # θ: pre-shrinkage af korrelationer mod identitetsmatrix
 
 # ── Signal ───────────────────────────────────────────────────
 LOOKBACK_MONTHS  = 12    # XSMOM/TSMOM lookback (måneder)
-                         # Equity 3: 12m | Equity 4: 24m | Equity 5: 6m | Equity 6: 3m
 
 # ── EPO ──────────────────────────────────────────────────────
 GAMMA            = 3
@@ -242,6 +240,13 @@ Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier 
 - Yahoo Finance-data filtreres automatisk: tickers med mere end 20% (industrier) eller 35% (enkeltaktier) manglende data frasorteres.
 
 ---
+## Øvrige hjælpe funktioner
+- **verify_xsmom** - Viser summen af positive og negative vægte til hver t. Sikre at vægte ≈ 0 hver måned
+- **get_weights_at_date** - Viser EPO vægte på et givent tidspunkt
+- **performance_summary** - Printer SR, merafkast, Volatilitet, Win Rate, bedste måned og dårligste måned for hver strategi
+- **visualize_date_flow_simple** - Viser hvilken periode der indgår i signal (t-1), EPO-vægte (t), og afkast (t+1)
+- **plot_visualizations, plot_rolling_volatility, plot_signal, plot_turnover, ect.** - Diverse visualiseringer ved matplotlib
+
 
 ## Referencer
 
