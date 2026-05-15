@@ -11,22 +11,19 @@ Koden er organiseret sådan, at **`Equity_1.py` udgør kernen** — alle central
 ```
 Bachelor_/
 │
-├── Data/                               # Oprettes manuelt — se nedenfor
-│   ├── 49_Industry_monthly.csv         # Kenneth French — månedlige industrier
-│   ├── 49_Industry_Portfolios_Daily.csv  # Kenneth French — daglige industrier
-│   └── Månedlig_rf.csv                 # Fama-French risikofri rente
+├── Data/                                  # Oprettes manuelt — se nedenfor
+│   ├── 49_Industry_monthly.csv            # Kenneth French — månedlige industrier
+│   ├── 49_Industry_Portfolios_Daily.csv   # Kenneth French — daglige industrier
+│   └── Månedlig_rf.csv                    # Fama-French risikofri rente
 │
-├── Equity_1.py                   ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
-├── equity_genskabning.py         Robusthedstest: 8 Equity-konfigurationer med varierende
-│                                 risikovindue, signalvindue, signaltype og optimeringsmetode
-├── Stock_Data.py                 Udvider Equity_1 til enkeltaktier (Yahoo Finance):
-│                                 TSMOM-signal, buy-and-hold, årlig rebalancering, gearing
-├── Signal_Visual.py              Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
-├── Best_stocks_from_industry.py  Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
-├── Get_stock_data.py             Udgået...
-├── SIC koder.py                  Bygger aktieunivers via SEC EDGAR + market cap-filter
-├── Sammensat.py                  Eksplorativ analyse: daglige merafkast og korrelationer
-└── rf_monthly.py                 Tidlig analyse: rf-konvertering, kumulativt afkast
+├── Equity_1.py                            ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
+├── equity_genskabning.py                  Robusthedstest: 8 Equity-konfigurationer med varierende risikovindue,
+                                           signalvindue, signaltype og optimeringsmetode
+├── Stock_Data.py                          Udvider Equity_1 til enkeltaktier (Yahoo Finance): TSMOM-signal, buy-and-hold,
+                                           årlig rebalancering, gearing
+├── Signal_Visual.py                       Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
+├── Best_stocks_from_industry.py           Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
+└── SIC koder.py                           Bygger aktieunivers via SEC EDGAR + market cap-filter
 ```
 
 ### Hvad er implementeret i Equity_1.py
@@ -45,9 +42,28 @@ Bachelor_/
 
 De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMOM-signal og forankret EPO (`epo_anchored_weights`); `Stock_Data.py` tilføjer er implementering i aktieuniverset. Dvs. vi introducerer simple momentum long/short, buy-and-hold og årlig rebalancering.
 
+## Konstanter til replikering af artiklens SR i perioden 1942-2018
+```python
+# ── Tidsperiode ──────────────────────────────────────────────
+DATA_START_DATE     = "1926-07-01"   # Hvorfra data indlæses
+BACKTEST_START_DATE = "1942-01-01"   # OOS-periodens start
+BACKTEST_END_DATE   = "2018-12-31"   # OOS-periodens slut
+
+# ── Risikomodel ──────────────────────────────────────────────
+RISK_WINDOW      = 60    # Rullende vindue for kovariansestimering (måneder)
+CORR_PRESHRINK   = 0.05  # θ: pre-shrinkage af korrelationer mod identitetsmatrix
+
+# ── Signal ───────────────────────────────────────────────────
+LOOKBACK_MONTHS  = 12    # XSMOM
+
+# ── EPO ──────────────────────────────────────────────────────
+GAMMA            = 3
+CANDIDATE_WS     = [0.00, 0.10, 0.25, 0.50, 0.75, 0.90, 0.99, 1.00]
+MIN_HISTORY_OOS  = 12
+```
 ---
 
-## Kritisk: Konstanter der skal tilpasses
+## Konstanter der skal tilpasses
 
 > **Alle nøgleparametre styres via konstanter øverst i hvert script.** Inden kørsel skal man aktivt tage stilling til hvilken periode, hvilket risikovindue og hvilket signal man ønsker — og justere konstanterne tilsvarende. Dette gælder både `Equity_1.py` og de scripts, der kalder visualiseringer og backtests baseret på samme parametre.
 
