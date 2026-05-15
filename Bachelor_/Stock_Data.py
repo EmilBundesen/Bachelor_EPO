@@ -19,20 +19,17 @@ from Equity_1 import (
     MIN_HISTORY_OOS,
     backtest_strategy,
     epo_weights,
-    get_weights_at_date
 )
 
 from Best_stocks_from_industry import DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR_PATH
 
 from Investeringsomkostninger import (
-    compute_turnover_series,
-    compute_turnover_annual_rebalance,
-    print_turnover_stats,
     plot_turnover,
     compute_net_returns,
     plot_net_cumulative_vs_cost
     )
 
+# Vær opmærksom på disse konstanter
 START_DATE        = "2010-01-01"
 END_DATE          = "2025-12-31"
 BACKTEST_START    = "2020-01-01"
@@ -85,44 +82,6 @@ def subset(df, start, end):
 
 
 # ── Signal ────────────────────────────────────────────────────
-
-def compute_combined_signal(monthly_ret, ticker_to_sector,
-                             lookback=LOOKBACK_MONTHS):
-    """
-    To-lags momentum signal:
-      Lag 1 — Sektor-TSMOM: fortegn på sektorens 12m afkast
-      Lag 2 — Intra-sektor XSMOM (Eq. 24-25): rang inden for sektor
-    Skalering: unit-leverage per sektor, 1/n_sektorer på tværs.
-    """
-    roll = monthly_ret.rolling(window=lookback, min_periods=lookback).sum()
-    sector_groups = {}
-    for ticker, sector in ticker_to_sector.items():
-        sector_groups.setdefault(sector, []).append(ticker)
-
-    out = pd.DataFrame(np.nan, index=roll.index, columns=roll.columns)
-    n_sectors = len(sector_groups)
-
-    for date, row in roll.iterrows():
-        sector_signals = {}
-        for sector, tickers in sector_groups.items():
-            avail = row[tickers].dropna()
-            if len(avail) < 2:
-                continue
-            direction = np.sign(avail.mean())
-            if direction == 0:
-                continue
-            demeaned = avail - avail.mean()
-            pos = demeaned[demeaned > 0].sum()
-            neg = demeaned[demeaned < 0].sum()
-            if pos == 0 or neg == 0:
-                continue
-            c_t = 1.0 / max(pos, abs(neg))
-            sector_signals[sector] = direction * c_t * demeaned
-        for sector, sig in sector_signals.items():
-            out.loc[date, sig.index] = sig.values / n_sectors
-
-    return out
-
 def compute_tsmom_signal(monthly_ret, ticker_to_sector,
                           lookback=LOOKBACK_MONTHS):
     """
