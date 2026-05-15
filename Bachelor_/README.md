@@ -44,9 +44,9 @@ De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMO
 
 ---
 
-#### Konstanter til genskabelse af Equity 1 fra artiklen
+## Konstanter til genskabelse af Equity 1 fra artiklen
  
-For at genskabe den primære konfiguration fra Pedersen, Babu & Levine (2021) skal følgende konstanter sættes øverst i `Equity_1.py`:
+For at genskabe den primære konfiguration fra Pedersen med flere (2021) skal følgende konstanter sættes øverst i `Equity_1.py`:
  
 ```python
 DATA_START_DATE     = "1926-07-01"   
@@ -60,6 +60,8 @@ GAMMA           = 3     # Risikoaversion (udlignes i Sharpe-ratio)
 ```
  
 Signal: `compute_xsmom()` — ingen ændringer nødvendige.
+
+Herefter køres filen
 
 ## Kritisk: Konstanter der skal tilpasses
 
