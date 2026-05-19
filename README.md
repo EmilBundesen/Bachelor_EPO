@@ -42,7 +42,7 @@ Bachelor_/
 
 De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMOM-signal og forankret EPO (`epo_anchored_weights`); `Stock_Data.py` tilføjer er implementering i aktieuniverset. Dvs. vi introducerer simple momentum long/short, buy-and-hold og årlig rebalancering.
 
-## Konstanter til replikering af artiklens SR i perioden 1942-2018
+## Konstanter til replikering af artiklens SR i perioden 1942-2018 - husk at opdater filstien (se nedenfor)
 ```python
 # ── Tidsperiode ──────────────────────────────────────────────
 DATA_START_DATE     = "1926-07-01"   # Hvorfra data indlæses
