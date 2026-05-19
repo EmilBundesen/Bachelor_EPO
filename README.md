@@ -111,7 +111,7 @@ Opgaven analyserer 8 konfigurationer med varierende risikovindue, signalvindue, 
 
 ### Filstier skal opdateres
 
-Alle scripts har hardkodede absolutte stier. Søg og erstat `/Users/emilbundesen/Desktop/Bachelor/` med din egen rodmappe:
+Alle scripts har hardkodede absolutte stier. Søg og erstat `/Users/emilbundesen/Desktop/Bachelor/`:
 
 ```python
 # Eksempel i Equity_1.py
@@ -130,10 +130,8 @@ Scripts med hardkodede stier: `Equity_1.py`, `equity_genskabning.py`, `Sammensat
 ### Krav
 
 ```bash
-pip install numpy pandas matplotlib seaborn scipy yfinance tqdm requests
+pip install numpy pandas matplotlib seaborn scipy yfinance tqdm
 ```
-
-Python 3.10+ anbefales.
 
 ### Data
 
