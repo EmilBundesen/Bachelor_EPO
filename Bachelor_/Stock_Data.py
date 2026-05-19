@@ -29,6 +29,8 @@ from Investeringsomkostninger import (
     plot_net_cumulative_vs_cost
     )
 
+from constrain_epo import (print_violation_report, plot_violation_heatmap)
+
 # Vær opmærksom på disse konstanter
 START_DATE        = "2010-01-01"
 END_DATE          = "2025-12-31"
@@ -1174,6 +1176,20 @@ def main():
     plot_epo_weights_over_time(monthly_excess, xsmom, corr_shrunk, vols,
                                GAMMA, w=0.75, start="2023-01-01",
                                end="2025-12-31", top_n=10)
+
+    # Violations rapport — alle w-værdier
+    print_violation_report(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, bound=0.08,
+        start="2020-01-01", end="2025-12-31",
+    )
+
+    # Heatmap for w=0.75
+    plot_violation_heatmap(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, w=0.75, bound=0.08,
+        start="2020-01-01", end="2025-12-31",
+    )
 
     print_leverage_table(
         monthly_excess=monthly_excess,
