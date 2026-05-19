@@ -11,19 +11,19 @@ Koden er organiseret sådan, at **`Equity_1.py` udgør kernen** — alle central
 ```
 Bachelor_/
 │
-├── Data/                               # Oprettes manuelt — se nedenfor
-│   ├── 49_Industry_monthly.csv         # Kenneth French — månedlige industrier
+├── Data/                                 # Oprettes manuelt — se nedenfor
+│   ├── 49_Industry_monthly.csv           # Kenneth French — månedlige industrier
 │   ├── 49_Industry_Portfolios_Daily.csv  # Kenneth French — daglige industrier
-│   └── Månedlig_rf.csv                 # Fama-French risikofri rente
+│   └── Månedlig_rf.csv                   # Fama-French risikofri rente
 │
-├── Equity_1.py                         ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
-├── equity_genskabning.py               Robusthedstest: 8 Equity-konfigurationer med varierende
-│                                       risikovindue, signalvindue, signaltype og optimeringsmetode
-├── Stock_Data.py                       Udvider Equity_1 til enkeltaktier (Yahoo Finance):
-│                                       TSMOM-signal, buy-and-hold, årlig rebalancering, gearing
-├── Signal_Visual.py                    Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
-├── Best_stocks_from_industry.py        Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
-└── SIC koder.py                        Bygger aktieunivers via SEC EDGAR + market cap-filter
+├── Equity_1.py                           ← KERNEFIL: EPO-funktioner, XSMOM, risikomodel, backtest
+├── equity_genskabning.py                 Robusthedstest: 8 Equity-konfigurationer med varierende risikovindue,
+                                          signalvindue, signaltype og optimeringsmetode
+├── Stock_Data.py                         Udvider Equity_1 til enkeltaktier (Yahoo Finance): TSMOM-signal,
+                                          buy-and-hold, årlig rebalancering, gearing
+├── Signal_Visual.py                      Visualiseringer: XSMOM-signal, rullende volatilitet, turnover
+├── Best_stocks_from_industry.py          Datahentning: enkeltaktier pr. sektor (Yahoo Finance)
+└── SIC koder.py                          Bygger aktieunivers via SEC EDGAR + market cap-filter
 ```
 
 ### Hvad er implementeret i Equity_1.py
@@ -44,9 +44,9 @@ De øvrige scripts bygger oven på disse: `equity_genskabning.py` tilføjer TSMO
 
 ---
 
-#### Konstanter til genskabelse af Equity 1 fra artiklen
+## Konstanter til genskabelse af Equity 1 fra artiklen
  
-For at genskabe den primære konfiguration fra Pedersen, Babu & Levine (2021) skal følgende konstanter sættes øverst i `Equity_1.py`:
+For at genskabe den primære konfiguration fra Pedersen med flere (2021) skal følgende konstanter sættes øverst i `Equity_1.py`:
  
 ```python
 DATA_START_DATE     = "1926-07-01"   
@@ -60,6 +60,8 @@ GAMMA           = 3     # Risikoaversion (udlignes i Sharpe-ratio)
 ```
  
 Signal: `compute_xsmom()` — ingen ændringer nødvendige.
+
+Herefter køres filen
 
 ## Kritisk: Konstanter der skal tilpasses
 
@@ -75,12 +77,10 @@ BACKTEST_END_DATE   = "2025-12-31"   # OOS-periodens slut
 
 # ── Risikomodel ──────────────────────────────────────────────
 RISK_WINDOW      = 24    # Rullende vindue for kovariansestimering (måneder)
-                         # Equity 1: 60m | Equity 2: 36m | Equity 3+: 24m
 CORR_PRESHRINK   = 0.05  # θ: pre-shrinkage af korrelationer mod identitetsmatrix
 
 # ── Signal ───────────────────────────────────────────────────
 LOOKBACK_MONTHS  = 12    # XSMOM/TSMOM lookback (måneder)
-                         # Equity 3: 12m | Equity 4: 24m | Equity 5: 6m | Equity 6: 3m
 
 # ── EPO ──────────────────────────────────────────────────────
 GAMMA            = 3
@@ -192,7 +192,6 @@ data_daily_prices.parquet
 data_ticker_sector.csv
 ```
 
-Sektor-universet defineres i `sectors`-dict'en øverst i filen. Filen indeholder flere kommenterede konfigurationer svarende til forskellige risikovinduer og perioder fra opgaven — vælg den relevante og fjern kommentarerne.
 
 **Trin 2:** Kør backtest:
 
@@ -216,7 +215,12 @@ Konstanter for periode, signal og risikovindue øverst i `Stock_Data.py` skal ma
 python "SIC koder.py"
 ```
 
-Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier pr. sektor med størst market cap pr. `MARKET_CAP_DATE`. Output er en Python-dict klar til indsætning i `Best_stocks_from_industry.py`. Resultater caches i `sec_universe_cache.csv` for at undgå gentagne API-kald.
+Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier pr. sektor med størst market cap pr. `MARKET_CAP_DATE`. Output er en Python-dict klar til indsætning i `Best_stocks_from_industry.py`. Resultater caches i `sec_universe_cache.csv` for at undgå gentagne API-kald. 
+
+De udvalgte sektorer skrives i dict: WANTED_SECTORS. Disse sektorer er fundet ved funktionen **print_avg_epo_weights_year** fra Equity_1 med parametrene: 
+DATA_START_DATE     = "1985-01-01"   # Hvorfra data indlæses
+BACKTEST_START_DATE = "2010-01-01"   # OOS-periodens start
+BACKTEST_END_DATE   = "2022-12-31"   # OOS-periodens slut
 
 ---
 
@@ -242,6 +246,13 @@ Henter SIC-koder fra SEC EDGAR, mapper til FF49-sektorer og vælger de N aktier 
 - Yahoo Finance-data filtreres automatisk: tickers med mere end 20% (industrier) eller 35% (enkeltaktier) manglende data frasorteres.
 
 ---
+## Øvrige hjælpe funktioner
+- **verify_xsmom** - Viser summen af positive og negative vægte til hver t. Sikre at vægte ≈ 0 hver måned
+- **get_weights_at_date** - Viser EPO vægte på et givent tidspunkt
+- **performance_summary** - Printer SR, merafkast, Volatilitet, Win Rate, bedste måned og dårligste måned for hver strategi
+- **visualize_date_flow_simple** - Viser hvilken periode der indgår i signal (t-1), EPO-vægte (t), og afkast (t+1)
+- **plot_visualizations, plot_rolling_volatility, plot_signal, plot_turnover, ect.** - Diverse visualiseringer ved matplotlib
+
 
 ## Referencer
 
