@@ -1201,6 +1201,26 @@ def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
 
 
 
+def print_long_only_summary_table(lo_strategies: dict[str, pd.Series],
+                                   start="2023-01-01", end="2025-12-31"):
+    """
+    Selvstændig tabel for long-only EPO: ann. afkast, ann. vol og Sharpe.
+    """
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    width = 65
+    print("\n" + "=" * width)
+    print(f"LONG-ONLY EPO (w=0.75) — {start[:7]} → {end[:7]}")
+    print("=" * width)
+    print(f"  {'Strategi':<35} {'Ann. Ret':>10} {'Ann. Vol':>10} {'Sharpe':>8}")
+    print("-" * width)
+    for name, series in lo_strategies.items():
+        data = series.loc[s:e].dropna()
+        p = performance_summary(data, name)
+        print(f"  {name:<35} {p['Ann. Return']:>10.4f} "
+              f"{p['Ann. Vol']:>10.4f} {p['Sharpe']:>8.4f}")
+    print("=" * width)
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -1359,6 +1379,7 @@ def main():
         start=PERIOD_START, end=PERIOD_END,
         target_ge=TARGET_GE
     )
+    print_scaled_annual_table(scaled, start=PERIOD_START, end=PERIOD_END)
 
     print("Beregner long-only strategier (GE=100%, ingen skalering)...")
     lo_strategies = backtest_long_only_period(
@@ -1366,9 +1387,7 @@ def main():
         gamma=GAMMA, w=W,
         start=PERIOD_START, end=PERIOD_END,
     )
-    # Flet long-only ind — de vises efter de leverage-skalerede strategier
-    scaled_with_lo = {**scaled, **lo_strategies}
-    print_scaled_annual_table(scaled_with_lo, start=PERIOD_START, end=PERIOD_END)
+    print_long_only_summary_table(lo_strategies, start=PERIOD_START, end=PERIOD_END)
 
     # ── 8. Long-Only EPO tabel ────────────────────────────────
     print_long_only_performance_table(
