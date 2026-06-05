@@ -1064,6 +1064,88 @@ def backtest_leverage_scaled_period(monthly_excess, xsmom, corr_shrunk, vols,
     }
 
 
+def backtest_long_only_period(monthly_excess, xsmom, corr_shrunk, vols,
+                              gamma, w=0.75,
+                              start="2023-01-01",
+                              end="2025-12-31"):
+    """
+    Long-only EPO (post-processing clip + renormalisering) for tre
+    rebalanceringsfrekvenser i perioden.  GE = 1 per konstruktion — ingen
+    leverage-skalering nødvendig.
+    """
+    period = monthly_excess.loc[start:end]
+
+    # ── Buy-and-Hold (fryses ved 2022-12-31) ─────────────────
+    sig_date_bah = monthly_excess.index[
+        monthly_excess.index <= pd.to_datetime("2022-12-31")
+    ][-1]
+    wts_bah = epo_weights_long_only(
+        xsmom.loc[sig_date_bah], corr_shrunk[sig_date_bah],
+        vols[sig_date_bah], gamma, w)
+
+    # ── Initialisér ──────────────────────────────────────────
+    current_wts_ann = None
+    rets_bah, rets_mon, rets_ann, dates = [], [], [], []
+
+    for date, row in period.iterrows():
+        valid_signals = xsmom.index[xsmom.index < date]
+        if len(valid_signals) == 0:
+            continue
+        sig_date = valid_signals[-1]
+
+        if sig_date not in corr_shrunk or sig_date not in vols:
+            continue
+
+        # Månedlig rebalancering
+        wts_mon = epo_weights_long_only(
+            xsmom.loc[sig_date], corr_shrunk[sig_date],
+            vols[sig_date], gamma, w)
+        if len(wts_mon) == 0:
+            continue
+
+        # Årlig rebalancering — opdater i januar
+        if date.month == 1 or current_wts_ann is None:
+            wts_ann = epo_weights_long_only(
+                xsmom.loc[sig_date], corr_shrunk[sig_date],
+                vols[sig_date], gamma, w)
+            if len(wts_ann) > 0:
+                current_wts_ann = wts_ann
+
+        if current_wts_ann is None:
+            continue
+
+        r = row
+
+        # Buy-and-Hold
+        if len(wts_bah) > 0:
+            r_bah = r.reindex(wts_bah.index).dropna()
+            w_bah = wts_bah.reindex(r_bah.index).dropna()
+            ret_bah = (w_bah * r_bah.reindex(w_bah.index)).sum() if len(w_bah) > 0 else np.nan
+        else:
+            ret_bah = np.nan
+
+        # Månedlig reb.
+        r_mon = r.reindex(wts_mon.index).dropna()
+        w_mon = wts_mon.reindex(r_mon.index).dropna()
+        ret_mon = (w_mon * r_mon.reindex(w_mon.index)).sum() if len(w_mon) > 0 else np.nan
+
+        # Årlig reb.
+        r_ann = r.reindex(current_wts_ann.index).dropna()
+        w_ann = current_wts_ann.reindex(r_ann.index).dropna()
+        ret_ann = (w_ann * r_ann.reindex(w_ann.index)).sum() if len(w_ann) > 0 else np.nan
+
+        rets_bah.append(ret_bah)
+        rets_mon.append(ret_mon)
+        rets_ann.append(ret_ann)
+        dates.append(date)
+
+    return {
+        "LO Buy-and-Hold (GE=100%)":    pd.Series(rets_bah, index=dates),
+        "LO Månedlig reb. (GE=100%)":   pd.Series(rets_mon, index=dates),
+        "LO Årlig reb. (GE=100%)":      pd.Series(rets_ann, index=dates),
+    }
+
+
 def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
                                start="2023-01-01", end="2025-12-31"):
     """
@@ -1278,7 +1360,16 @@ def main():
         start=PERIOD_START, end=PERIOD_END,
         target_ge=TARGET_GE
     )
-    print_scaled_annual_table(scaled, start=PERIOD_START, end=PERIOD_END)
+
+    print("Beregner long-only strategier (GE=100%, ingen skalering)...")
+    lo_strategies = backtest_long_only_period(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END,
+    )
+    # Flet long-only ind — de vises efter de leverage-skalerede strategier
+    scaled_with_lo = {**scaled, **lo_strategies}
+    print_scaled_annual_table(scaled_with_lo, start=PERIOD_START, end=PERIOD_END)
 
     # ── 8. Long-Only EPO tabel ────────────────────────────────
     print_long_only_performance_table(
