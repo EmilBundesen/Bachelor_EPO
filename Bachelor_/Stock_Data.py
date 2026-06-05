@@ -1140,7 +1140,6 @@ def backtest_long_only_period(monthly_excess, xsmom, corr_shrunk, vols,
         dates.append(date)
 
     return {
-        "LO Buy-and-Hold (GE=100%)":    pd.Series(rets_bah, index=dates),
         "LO Månedlig reb. (GE=100%)":   pd.Series(rets_mon, index=dates),
         "LO Årlig reb. (GE=100%)":      pd.Series(rets_ann, index=dates),
     }
