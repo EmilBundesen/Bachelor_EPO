@@ -1204,15 +1204,49 @@ def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
 def print_long_only_summary_table(lo_strategies: dict[str, pd.Series],
                                    start="2023-01-01", end="2025-12-31"):
     """
-    Selvstændig tabel for long-only EPO: ann. afkast, ann. vol og Sharpe.
+    Tabel 12: årlige afkast (%) for 2023-2025 + ann. afkast, vol og SR
+    for long-only EPO månedlig og årlig rebalancering.
     """
     s, e = pd.to_datetime(start), pd.to_datetime(end)
-    width = 65
+    years = sorted({d.year for series in lo_strategies.values()
+                    for d in series.loc[s:e].index})
+
+    names = list(lo_strategies.keys())
+    col_w = 28
+    width = 10 + col_w * len(names)
+
+    header = f"  {'År':<8}" + "".join(f"{n:>{col_w}}" for n in names)
+    sep    = "-" * width
+
     print("\n" + "=" * width)
-    print(f"LONG-ONLY EPO (w=0.75) — {start[:7]} → {end[:7]}")
+    print(f"TABEL 12 — LONG-ONLY EPO (w=0.75): ÅRLIGE AFKAST {start[:4]}–{end[:4]}")
     print("=" * width)
-    print(f"  {'Strategi':<35} {'Ann. Ret':>10} {'Ann. Vol':>10} {'Sharpe':>8}")
-    print("-" * width)
+    print(header)
+    print(sep)
+
+    for year in years:
+        row_str = f"  {year:<8}"
+        for name, series in lo_strategies.items():
+            yr_data = series.loc[s:e]
+            yr_data = yr_data[yr_data.index.year == year].dropna()
+            if len(yr_data) == 0:
+                row_str += f"{'N/A':>{col_w}}"
+            else:
+                ann_ret = (1 + yr_data).prod() - 1
+                row_str += f"{ann_ret:>{col_w}.2%}"
+        print(row_str)
+
+    print(sep)
+    cum_str = f"  {'Kumuleret':<8}"
+    for name, series in lo_strategies.items():
+        data = series.loc[s:e].dropna()
+        cum  = (1 + data).prod() - 1
+        cum_str += f"{cum:>{col_w}.2%}"
+    print(cum_str)
+
+    print(sep)
+    print(f"\n  {'Strategi':<35} {'Ann. Ret':>10} {'Ann. Vol':>10} {'Sharpe':>8}")
+    print("-" * 67)
     for name, series in lo_strategies.items():
         data = series.loc[s:e].dropna()
         p = performance_summary(data, name)
