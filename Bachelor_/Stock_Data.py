@@ -448,6 +448,117 @@ def compute_ge_indmom(monthly_excess, xsmom, vols_dict, start, end):
     return pd.Series(ge, index=dates)
 
 
+# ── Long-Only EPO ─────────────────────────────────────────────
+
+def epo_weights_long_only(signal, corr, vols, gamma, w):
+    """
+    EPO med long-only constraint (post-processing):
+      1. Beregn EPO-vægte som normalt (inkl. negative)
+      2. Clip negative vægte til 0
+      3. Renormaliser så sum(vægte) = 1  (GE = 100%)
+    Returnerer tom Series hvis ingen positive vægte overlever.
+    """
+    raw = epo_weights(signal, corr, vols, gamma, w)
+    if len(raw) == 0:
+        return pd.Series(dtype=float)
+    long_only = raw.clip(lower=0)
+    total = long_only.sum()
+    if total <= 0:
+        return pd.Series(dtype=float)
+    return long_only / total
+
+
+def build_epo_panel_long_only(monthly_excess, signals, corr_dict, vols_dict,
+                               gamma, candidate_ws) -> pd.DataFrame:
+    """Bygger et panel af long-only EPO-afkast for alle w-værdier."""
+    risk_dates = set(corr_dict)
+    sig_dates  = set(signals.index)
+    parts = []
+    for w in candidate_ws:
+        print(f"  Long-only w = {w:.2f} …", flush=True)
+
+        def weight_fn(date, _w=w):
+            if date not in risk_dates or date not in sig_dates:
+                return pd.Series(dtype=float)
+            return epo_weights_long_only(
+                signals.loc[date], corr_dict[date], vols_dict[date], gamma, _w)
+
+        s = backtest_strategy(monthly_excess, weight_fn,
+                              name=f"EPO_LO_w_{w:.2f}")
+        parts.append(s)
+    return pd.concat(parts, axis=1).sort_index()
+
+
+def print_long_only_performance_table(monthly_excess, signals,
+                                       corr_dict, vols_dict,
+                                       corr_raw, vols_raw,
+                                       gamma, oos_start, oos_end,
+                                       candidate_ws=CANDIDATE_WS):
+    """
+    Printer en selvstændig performance-tabel OOS for long-only EPO
+    sammenlignet med den tilsvarende long-short EPO og 1/N benchmark.
+    """
+    from Equity_1 import build_epo_panel, build_dynamic_oos_epo, backtest_mvo_no_shrink
+
+    s, e = oos_start, oos_end
+
+    # Long-only panel + dynamisk OOS
+    print("\nBygger long-only EPO panel...")
+    lo_panel = build_epo_panel_long_only(
+        monthly_excess, signals, corr_dict, vols_dict, gamma, candidate_ws)
+    lo_dyn = build_dynamic_oos_epo(lo_panel, oos_start=s,
+                                    min_history=MIN_HISTORY_OOS)
+    lo_dyn.name = "EPO Long-Only: out-of-sample (dyn. w)"
+
+    # Long-short panel til sammenligning (allerede bygget i main, men
+    # vi bygger det her for at holde funktionen selvstændig)
+    print("Bygger long-short EPO panel til sammenligning...")
+    ls_panel = build_epo_panel(
+        monthly_excess, signals, corr_dict, vols_dict, gamma, candidate_ws)
+    ls_dyn = build_dynamic_oos_epo(ls_panel, oos_start=s,
+                                    min_history=MIN_HISTORY_OOS)
+    ls_dyn.name = "EPO Long-Short: out-of-sample (dyn. w)"
+
+    # 1/N benchmark
+    ew = compute_equal_weight_benchmark(monthly_excess)
+
+    # Saml rækker
+    rows = []
+    rows.append(performance_summary(subset(ls_dyn, s, e),
+                                    "EPO Long-Short: OOS (dyn. w)"))
+    rows.append(performance_summary(subset(lo_dyn, s, e),
+                                    "EPO Long-Only:  OOS (dyn. w)"))
+
+    w_labels_ls = {w: f"EPO Long-Short w={int(round(w*100))}%" for w in candidate_ws}
+    w_labels_lo = {w: f"EPO Long-Only  w={int(round(w*100))}%" for w in candidate_ws}
+
+    ls_oos = subset(ls_panel, s, e)
+    lo_oos = subset(lo_panel, s, e)
+    for w in candidate_ws:
+        col_ls = f"EPO_w_{w:.2f}"
+        col_lo = f"EPO_LO_w_{w:.2f}"
+        if col_ls in ls_oos.columns:
+            rows.append(performance_summary(ls_oos[col_ls], w_labels_ls[w]))
+        if col_lo in lo_oos.columns:
+            rows.append(performance_summary(lo_oos[col_lo], w_labels_lo[w]))
+
+    rows.append(performance_summary(subset(ew, s, e), "1/N (Equal Weight)"))
+
+    perf = pd.DataFrame(rows).set_index("Strategy")
+
+    width = 75
+    print("\n" + "=" * width)
+    print(f"LONG-ONLY vs. LONG-SHORT EPO — OOS: {s[:7]} → {e[:7]}")
+    print("=" * width)
+    print(perf.to_string())
+    print("=" * width)
+
+    perf.to_csv("performance_long_only_vs_long_short.csv")
+    print("\nGemt: performance_long_only_vs_long_short.csv")
+
+    return lo_panel, lo_dyn
+
+
 def print_leverage_table(monthly_excess, xsmom, corr_shrunk, vols,
                           corr_raw, vols_raw, gamma, backtest_start, end_date):
     s, e = backtest_start, end_date
@@ -1169,7 +1280,17 @@ def main():
     )
     print_scaled_annual_table(scaled, start=PERIOD_START, end=PERIOD_END)
 
-    # ── 8. Øvrig output (uændret) ─────────────────────────────
+    # ── 8. Long-Only EPO tabel ────────────────────────────────
+    print_long_only_performance_table(
+        monthly_excess, xsmom,
+        corr_shrunk, vols,
+        corr_raw, vols_raw,
+        gamma=GAMMA,
+        oos_start=BACKTEST_START_NEW,
+        oos_end=END_DATE,
+    )
+
+    # ── 9. Øvrig output (uændret) ─────────────────────────────
     print_top_bottom_stocks(monthly_excess, ticker_to_sector, END_DATE)
     print_top_bottom_correlations(daily_prices, ticker_to_sector, n=10)
 
