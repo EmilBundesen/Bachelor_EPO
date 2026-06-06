@@ -251,21 +251,20 @@ def backtest_epo_long_only(excess, tsmom, corr_dict, vols_dict, gamma, w):
 
 def print_industry_contribution_table(excess, tsmom, corr_dict, vols_dict,
                                        gamma, w=0.75,
-                                       start="2023-01-01", end="2025-12-31",
+                                       start="1980-01-01", end="2025-12-31",
                                        long_only=False):
     """
-    Afkastbidrag per industri (weight × return) summeret per år,
-    med geometrisk kumuleret total. Sorteret efter totalbidrag.
+    Gennemsnitligt årligt afkastbidrag per industri (weight × return)
+    over hele perioden. Total vises som geometrisk kumuleret afkast.
     """
-    s, e   = pd.to_datetime(start), pd.to_datetime(end)
-    idx    = excess.index
-    years  = sorted({d.year for d in idx if s <= d <= e})
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    idx  = excess.index
 
     risk_dates = set(corr_dict)
     sig_dates  = set(tsmom.index)
 
-    contrib      = {yr: {} for yr in years}
-    port_rets_yr = {yr: [] for yr in years}
+    contrib   = {}
+    port_rets = []
 
     for t in range(len(idx) - 1):
         date     = idx[t]
@@ -287,61 +286,51 @@ def print_industry_contribution_table(excess, tsmom, corr_dict, vols_dict,
         w_aln = wts.reindex(r.index).dropna()
         r_aln = r.reindex(w_aln.index)
 
-        yr = nxt_date.year
-        port_rets_yr[yr].append((w_aln * r_aln).sum())
+        port_rets.append((w_aln * r_aln).sum())
         for ind in w_aln.index:
-            contrib[yr][ind] = contrib[yr].get(ind, 0.0) + w_aln[ind] * r_aln[ind]
+            contrib[ind] = contrib.get(ind, 0.0) + w_aln[ind] * r_aln[ind]
 
-    geo_yr    = {yr: (np.prod([1 + r for r in rets]) - 1) if rets else np.nan
-                 for yr, rets in port_rets_yr.items()}
-    all_rets  = [r for rets in port_rets_yr.values() for r in rets]
-    geo_total = np.prod([1 + r for r in all_rets]) - 1 if all_rets else np.nan
+    n_months  = len(port_rets)
+    n_years   = n_months / 12.0
+    geo_total = np.prod([1 + r for r in port_rets]) - 1 if port_rets else np.nan
+    ann_total = (1 + geo_total) ** (1 / n_years) - 1 if n_years > 0 else np.nan
 
-    all_inds = sorted({ind for d in contrib.values() for ind in d})
-    df = pd.DataFrame({yr: {ind: contrib[yr].get(ind, 0.0) for ind in all_inds}
-                       for yr in years})
-    df["Total"] = df.sum(axis=1)
-    df = df.sort_values("Total", ascending=False)
-    totals = pd.Series({yr: geo_yr[yr] for yr in years} | {"Total": geo_total})
+    # Gns. månedligt bidrag → annualiseret (× 12)
+    contrib_ann = {ind: v / n_years for ind, v in contrib.items()}
+    inds = sorted(contrib_ann, key=contrib_ann.get, reverse=True)
 
     label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
-    col_w = 12
-    width = 22 + col_w * (len(years) + 1)
+    col_w = 18
+    width = 24 + col_w * 2
     print("\n" + "=" * width)
-    print(f"INDUSTRIBIDRAG TIL MERAFKAST — {label}  ({start[:4]}–{end[:4]})")
+    print(f"GNS. ÅRLIGT INDUSTRIBIDRAG — {label}  ({start[:4]}–{end[:4]})")
     print("=" * width)
-    print(f"  {'Industri':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Total':>{col_w}}")
+    print(f"  {'Industri':<22} {'Gns. årligt bidrag':>{col_w}} {'Kumuleret bidrag':>{col_w}}")
     print("-" * width)
-    for ind in df.index:
-        row = f"  {ind:<20}"
-        for yr in years:
-            row += f"{df.loc[ind, yr]:>{col_w}.2%}"
-        row += f"{df.loc[ind, 'Total']:>{col_w}.2%}"
-        print(row)
+    for ind in inds:
+        ann_c = contrib_ann[ind]
+        cum_c = contrib[ind]
+        print(f"  {ind:<22} {ann_c:>{col_w}.4%} {cum_c:>{col_w}.2%}")
     print("-" * width)
-    total_row = f"  {'Total (geo.)':<20}"
-    for yr in years:
-        total_row += f"{totals[yr]:>{col_w}.2%}"
-    total_row += f"{totals['Total']:>{col_w}.2%}"
-    print(total_row)
+    print(f"  {'Total':<22} {ann_total:>{col_w}.4%} {geo_total:>{col_w}.2%}")
     print("=" * width)
 
 
 def print_industry_exposure_table(excess, tsmom, corr_dict, vols_dict,
                                    gamma, w=0.75,
-                                   start="2023-01-01", end="2025-12-31",
+                                   start="1980-01-01", end="2025-12-31",
                                    long_only=False):
     """
-    Gennemsnitlig brutto-eksponering per industri per år (|vægt| summeret
-    per industri per måned → gennemsnit over måneder i året).
+    Gennemsnitlig brutto-eksponering per industri over hele perioden
+    (|vægt| gennemsnittet over alle måneder).
     """
-    s, e   = pd.to_datetime(start), pd.to_datetime(end)
-    idx    = excess.index
-    years  = sorted({d.year for d in idx if s <= d <= e})
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    idx  = excess.index
 
     risk_dates = set(corr_dict)
     sig_dates  = set(tsmom.index)
-    exposure   = {yr: {} for yr in years}
+    exposure   = {}
+    n_months   = 0
 
     for t in range(len(idx) - 1):
         date     = idx[t]
@@ -359,38 +348,30 @@ def print_industry_exposure_table(excess, tsmom, corr_dict, vols_dict,
         if len(wts) == 0:
             continue
 
-        yr = nxt_date.year
+        n_months += 1
         for ind, weight in wts.items():
-            exposure[yr].setdefault(ind, []).append(abs(weight))
+            exposure[ind] = exposure.get(ind, 0.0) + abs(weight)
 
-    all_inds = sorted({ind for d in exposure.values() for ind in d})
-    df = pd.DataFrame(
-        {yr: {ind: np.mean(exposure[yr][ind]) if ind in exposure[yr] else 0.0
-              for ind in all_inds}
-         for yr in years})
-    df["Gns."] = df.mean(axis=1)
-    df = df.sort_values("Gns.", ascending=False)
+    if n_months == 0:
+        print("Ingen data.")
+        return
+
+    exp_mean = {ind: v / n_months for ind, v in exposure.items()}
+    inds = sorted(exp_mean, key=exp_mean.get, reverse=True)
+    ge   = sum(exp_mean.values())
 
     label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
-    col_w = 12
-    width = 22 + col_w * (len(years) + 1)
+    col_w = 20
+    width = 24 + col_w
     print("\n" + "=" * width)
-    print(f"GENNEMSNITLIG INDUSTRIEKSPONERING (BRUTTO) — {label}  ({start[:4]}–{end[:4]})")
+    print(f"GNS. INDUSTRIEKSPONERING (BRUTTO) — {label}  ({start[:4]}–{end[:4]})")
     print("=" * width)
-    print(f"  {'Industri':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Gns.':>{col_w}}")
+    print(f"  {'Industri':<22} {'Gns. eksponering':>{col_w}}")
     print("-" * width)
-    for ind in df.index:
-        row = f"  {ind:<20}"
-        for yr in years:
-            row += f"{df.loc[ind, yr]:>{col_w}.2%}"
-        row += f"{df.loc[ind, 'Gns.']:>{col_w}.2%}"
-        print(row)
+    for ind in inds:
+        print(f"  {ind:<22} {exp_mean[ind]:>{col_w}.4%}")
     print("-" * width)
-    ge_row = f"  {'Total (GE)':<20}"
-    for yr in years:
-        ge_row += f"{df[yr].sum():>{col_w}.2%}"
-    ge_row += f"{df['Gns.'].sum():>{col_w}.2%}"
-    print(ge_row)
+    print(f"  {'Total (GE)':<22} {ge:>{col_w}.4%}")
     print("=" * width)
 
 
@@ -649,17 +630,16 @@ def main():
             f"{r['MaxDD']:>8.1%}"
         )
 
-    # ── 7. Industribidrag og eksponering 2023-2025 ─────────────
-    IND_START, IND_END = "2023-01-01", "2025-12-31"
-    print(f"\nBeregner industribidrag og eksponering ({IND_START[:4]}–{IND_END[:4]})...")
+    # ── 7. Industribidrag og eksponering 1980-2025 ─────────────
+    print(f"\nBeregner industribidrag og eksponering ({FULL_START[:4]}–{FULL_END[:4]})...")
 
     for lo in [False, True]:
         print_industry_contribution_table(
             excess, tsmom, corr_shrunk, vols, GAMMA, w=W,
-            start=IND_START, end=IND_END, long_only=lo)
+            start=FULL_START, end=FULL_END, long_only=lo)
         print_industry_exposure_table(
             excess, tsmom, corr_shrunk, vols, GAMMA, w=W,
-            start=IND_START, end=IND_END, long_only=lo)
+            start=FULL_START, end=FULL_END, long_only=lo)
 
     # ── 7. Figurer ─────────────────────────────────────────────
     print("\nGenererer figurer...")
