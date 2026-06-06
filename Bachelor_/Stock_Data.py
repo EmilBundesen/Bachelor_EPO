@@ -1301,6 +1301,97 @@ def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
     print("=" * width)
 
 
+def print_sector_exposure_table(monthly_excess, xsmom, corr_shrunk, vols,
+                                 ticker_to_sector, gamma, w=0.75,
+                                 start="2023-01-01", end="2025-12-31",
+                                 long_only=False):
+    """
+    Tabel: gennemsnitlig sektoreksponering (sum af aktievægte per sektor)
+    per år. Positive = long, negative = short.
+    """
+    s, e   = pd.to_datetime(start), pd.to_datetime(end)
+    idx    = monthly_excess.index
+    years  = sorted({d.year for d in idx if s <= d <= e})
+
+    risk_dates = set(corr_shrunk)
+    sig_dates  = set(xsmom.index)
+
+    # {år: {sektor: [månedlige eksponeringer]}}
+    exposure = {yr: {} for yr in years}
+
+    for t in range(len(idx) - 1):
+        date     = idx[t]
+        nxt_date = idx[t + 1]
+
+        if nxt_date < s or nxt_date > e:
+            continue
+        if date not in risk_dates or date not in sig_dates:
+            continue
+
+        if long_only:
+            wts = epo_weights_long_only(xsmom.loc[date], corr_shrunk[date],
+                                        vols[date], gamma, w)
+        else:
+            wts = epo_weights(xsmom.loc[date], corr_shrunk[date],
+                              vols[date], gamma, w)
+        if len(wts) == 0:
+            continue
+
+        yr = nxt_date.year
+        for ticker, weight in wts.items():
+            sector = ticker_to_sector.get(ticker, "Ukendt")
+            exposure[yr].setdefault(sector, []).append(weight)
+
+    # Gennemsnitlig eksponering per sektor per år
+    all_sectors = sorted({sec for yr_dict in exposure.values()
+                          for sec in yr_dict})
+    df = pd.DataFrame(
+        {yr: {sec: np.mean(exposure[yr][sec]) if sec in exposure[yr] else 0.0
+              for sec in all_sectors}
+         for yr in years}
+    )
+    df["Gns."] = df.mean(axis=1)
+    df = df.sort_values("Gns.", ascending=False)
+
+    col_w = 12
+    width  = 22 + col_w * (len(years) + 1)
+    label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
+    print("\n" + "=" * width)
+    print(f"GENNEMSNITLIG SEKTOREKSPONERING — {label}  ({start[:4]}–{end[:4]})")
+    print("=" * width)
+    header = f"  {'Sektor':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Gns.':>{col_w}}"
+    print(header)
+    print("-" * width)
+
+    for sec in df.index:
+        row = f"  {sec:<20}"
+        for yr in years:
+            row += f"{df.loc[sec, yr]:>{col_w}.2%}"
+        row += f"{df.loc[sec, 'Gns.']:>{col_w}.2%}"
+        print(row)
+
+    # Total eksponering per år (sum af abs. vægte = brutto-eksponering)
+    print("-" * width)
+    long_row  = f"  {'Total long':<20}"
+    short_row = f"  {'Total short':<20}"
+    ge_row    = f"  {'Brutto (GE)':<20}"
+    for yr in years:
+        long_val  = df[df[yr] > 0][yr].sum()
+        short_val = df[df[yr] < 0][yr].sum()
+        ge_val    = df[yr].abs().sum()
+        long_row  += f"{long_val:>{col_w}.2%}"
+        short_row += f"{short_val:>{col_w}.2%}"
+        ge_row    += f"{ge_val:>{col_w}.2%}"
+    # Gns. kolonnen
+    long_row  += f"{df[df['Gns.'] > 0]['Gns.'].sum():>{col_w}.2%}"
+    short_row += f"{df[df['Gns.'] < 0]['Gns.'].sum():>{col_w}.2%}"
+    ge_row    += f"{df['Gns.'].abs().sum():>{col_w}.2%}"
+    print(long_row)
+    print(short_row)
+    print(ge_row)
+    print("=" * width)
+
+
 def print_long_only_summary_table(lo_strategies: dict[str, pd.Series],
                                    start="2023-01-01", end="2025-12-31"):
     """
@@ -1523,13 +1614,24 @@ def main():
     )
     print_long_only_summary_table(lo_strategies, start=PERIOD_START, end=PERIOD_END)
 
-    # ── 7c. Sektorbidrag EPO w=0.75 (long-short og long-only) ──
+    # ── 7c. Sektorbidrag + eksponering: long-short og long-only ─
     print_sector_contribution_table(
         monthly_excess, xsmom, corr_shrunk, vols,
         ticker_to_sector, gamma=GAMMA, w=W,
         start=PERIOD_START, end=PERIOD_END,
     )
+    print_sector_exposure_table(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        ticker_to_sector, gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END,
+    )
     print_sector_contribution_table(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        ticker_to_sector, gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END,
+        long_only=True,
+    )
+    print_sector_exposure_table(
         monthly_excess, xsmom, corr_shrunk, vols,
         ticker_to_sector, gamma=GAMMA, w=W,
         start=PERIOD_START, end=PERIOD_END,
