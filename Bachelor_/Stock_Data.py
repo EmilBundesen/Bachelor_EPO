@@ -1204,7 +1204,8 @@ def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
 
 def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
                                      ticker_to_sector, gamma, w=0.75,
-                                     start="2023-01-01", end="2025-12-31"):
+                                     start="2023-01-01", end="2025-12-31",
+                                     long_only=False):
     """
     Tabel: sektorernes bidrag til det samlede merafkast for EPO w=0.75,
     opdelt på 2023, 2024 og 2025.
@@ -1231,8 +1232,12 @@ def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
         if date not in risk_dates or date not in sig_dates:
             continue
 
-        wts = epo_weights(xsmom.loc[date], corr_shrunk[date],
-                          vols[date], gamma, w)
+        if long_only:
+            wts = epo_weights_long_only(xsmom.loc[date], corr_shrunk[date],
+                                        vols[date], gamma, w)
+        else:
+            wts = epo_weights(xsmom.loc[date], corr_shrunk[date],
+                              vols[date], gamma, w)
         if len(wts) == 0:
             continue
 
@@ -1272,8 +1277,9 @@ def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
 
     col_w = 12
     width  = 22 + col_w * (len(years) + 1)
+    label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
     print("\n" + "=" * width)
-    print(f"SEKTORBIDRAG TIL MERAFKAST — EPO w={int(w*100)}%  ({start[:4]}–{end[:4]})")
+    print(f"SEKTORBIDRAG TIL MERAFKAST — {label}  ({start[:4]}–{end[:4]})")
     print("=" * width)
     header = f"  {'Sektor':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Total':>{col_w}}"
     print(header)
@@ -1517,11 +1523,17 @@ def main():
     )
     print_long_only_summary_table(lo_strategies, start=PERIOD_START, end=PERIOD_END)
 
-    # ── 7c. Sektorbidrag EPO w=0.75 ──────────────────────────
+    # ── 7c. Sektorbidrag EPO w=0.75 (long-short og long-only) ──
     print_sector_contribution_table(
         monthly_excess, xsmom, corr_shrunk, vols,
         ticker_to_sector, gamma=GAMMA, w=W,
         start=PERIOD_START, end=PERIOD_END,
+    )
+    print_sector_contribution_table(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        ticker_to_sector, gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END,
+        long_only=True,
     )
 
     # ── 8. Long-Only EPO tabel ────────────────────────────────
