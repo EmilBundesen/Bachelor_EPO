@@ -35,6 +35,7 @@ from matplotlib.lines import Line2D
 
 from Equity_1 import (
     compute_risk_model,
+    compute_risk_model_ewm,
     backtest_strategy,
     backtest_epo_fixed_w,
     epo_weights,
@@ -64,9 +65,10 @@ PERIODS = [
     ("2020-01-01", "2022-12-31", "2020–2022"),
 ]
 
-C_EPO    = "#1a4f8a"  # mørk blå — EPO w=0.75
-C_TSMVOL = "#e67e22"  # orange   — TSMOM vol-skaleret
-C_TSMEW  = "#c0392b"  # rød      — TSMOM equal-weighted
+C_EPO    = "#1a4f8a"  # mørk blå  — EPO w=0.75 (rullende)
+C_EPOEWM = "#6c3483"  # lilla     — EPO w=0.75 (EWMA)
+C_TSMVOL = "#e67e22"  # orange    — TSMOM vol-skaleret
+C_TSMEW  = "#c0392b"  # rød       — TSMOM equal-weighted
 
 
 # ── Fælles TSMOM signal ───────────────────────────────────────────────────────
@@ -379,7 +381,7 @@ def print_industry_exposure_table(excess, tsmom, corr_dict, vols_dict,
 
 # ── Visualisering ─────────────────────────────────────────────────────────────
 
-def plot_subperiods(all_epo, all_ew, all_vol, labels):
+def plot_subperiods(all_epo, all_epo_ewm, all_ew, all_vol, labels):
     n = len(labels)
     fig = plt.figure(figsize=(16, 10))
     fig.patch.set_facecolor("#f8f9fa")
@@ -391,16 +393,17 @@ def plot_subperiods(all_epo, all_ew, all_vol, labels):
         top=0.88, bottom=0.08, left=0.06, right=0.97,
     )
 
-    for col, (epo, ew, vol, label) in enumerate(
-        zip(all_epo, all_ew, all_vol, labels)
+    for col, (epo, epo_ewm, ew, vol, label) in enumerate(
+        zip(all_epo, all_epo_ewm, all_ew, all_vol, labels)
     ):
         ax_top = fig.add_subplot(gs[0, col])
         ax_top.set_facecolor("white")
 
         for s, color, lw, ls in [
-            (epo, C_EPO,    2.2, "-"),
-            (vol, C_TSMVOL, 1.8, "--"),
-            (ew,  C_TSMEW,  1.6, ":"),
+            (epo,     C_EPO,    2.2, "-"),
+            (epo_ewm, C_EPOEWM, 2.0, "-."),
+            (vol,     C_TSMVOL, 1.8, "--"),
+            (ew,      C_TSMEW,  1.6, ":"),
         ]:
             cum = (1 + s.dropna()).cumprod() - 1
             ax_top.plot(cum.index, cum * 100, color=color, lw=lw, ls=ls)
@@ -426,9 +429,10 @@ def plot_subperiods(all_epo, all_ew, all_vol, labels):
         ax_bot.set_facecolor("white")
 
         for s, color, lw, ls in [
-            (epo, C_EPO,    2.0, "-"),
-            (vol, C_TSMVOL, 1.6, "--"),
-            (ew,  C_TSMEW,  1.4, ":"),
+            (epo,     C_EPO,    2.0, "-"),
+            (epo_ewm, C_EPOEWM, 1.8, "-."),
+            (vol,     C_TSMVOL, 1.6, "--"),
+            (ew,      C_TSMEW,  1.4, ":"),
         ]:
             roll_sr = (
                 s.rolling(12).mean() * 12
@@ -447,19 +451,21 @@ def plot_subperiods(all_epo, all_ew, all_vol, labels):
 
     legend_elements = [
         Line2D([0], [0], color=C_EPO,    lw=2.2, ls="-",
-               label=f"EPO w={W} (korrelationsshrinkage)"),
+               label=f"EPO w={W} (rullende {RISK_WINDOW}m kovarians)"),
+        Line2D([0], [0], color=C_EPOEWM, lw=2.0, ls="-.",
+               label=f"EPO w={W} (EWMA kovarians, span={RISK_WINDOW}m)"),
         Line2D([0], [0], color=C_TSMVOL, lw=1.8, ls="--",
                label=f"TSMOM Vol-skaleret (1/n × σ_target/σ_i, ingen korr.)"),
         Line2D([0], [0], color=C_TSMEW,  lw=1.6, ls=":",
                label="TSMOM Equal-Weighted (1/N, ingen risikojust.)"),
     ]
     fig.legend(
-        handles=legend_elements, loc="upper center", ncol=3,
+        handles=legend_elements, loc="upper center", ncol=2,
         fontsize=9, frameon=True, framealpha=0.9,
         edgecolor="#cccccc", bbox_to_anchor=(0.5, 0.975),
     )
     fig.suptitle(
-        f"EPO w={W} vs. TSMOM Vol vs. TSMOM EW — Tre delperioder\n"
+        f"EPO w={W} (rullende vs. EWMA) vs. TSMOM — Tre delperioder\n"
         "Fama-French 49 industrier  |  Samme signal — forskellig porteføljekonstruktion",
         fontsize=13, fontweight="bold", y=1.01,
     )
@@ -470,15 +476,16 @@ def plot_subperiods(all_epo, all_ew, all_vol, labels):
     plt.show()
 
 
-def plot_combined_cumulative(epo_full, ew_full, vol_full):
+def plot_combined_cumulative(epo_full, epo_ewm_full, ew_full, vol_full):
     fig, ax = plt.subplots(figsize=(14, 6))
     fig.patch.set_facecolor("#f8f9fa")
     ax.set_facecolor("white")
 
     for s, color, lw, ls, label in [
-        (epo_full, C_EPO,    2.2, "-",  f"EPO w={W} (korrelationsshrinkage)"),
-        (vol_full, C_TSMVOL, 1.8, "--", f"TSMOM Vol-skaleret (σ_target={VOL_TARGET*100:.0f}%)"),
-        (ew_full,  C_TSMEW,  1.6, ":",  "TSMOM Equal-Weighted (1/N)"),
+        (epo_full,     C_EPO,    2.2, "-",  f"EPO w={W} (rullende {RISK_WINDOW}m kovarians)"),
+        (epo_ewm_full, C_EPOEWM, 2.0, "-.", f"EPO w={W} (EWMA kovarians, span={RISK_WINDOW}m)"),
+        (vol_full,     C_TSMVOL, 1.8, "--", f"TSMOM Vol-skaleret (σ_target={VOL_TARGET*100:.0f}%)"),
+        (ew_full,      C_TSMEW,  1.6, ":",  "TSMOM Equal-Weighted (1/N)"),
     ]:
         cum = (1 + s.dropna()).cumprod() - 1
         ax.plot(cum.index, cum * 100, color=color, lw=lw, ls=ls, label=label)
@@ -500,10 +507,10 @@ def plot_combined_cumulative(epo_full, ew_full, vol_full):
         mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
     ax.set_ylabel("Kumuleret merafkast (%)", fontsize=10)
     ax.set_title(
-        f"EPO w={W} vs. TSMOM Vol vs. TSMOM EW — Fuld periode\n"
+        f"EPO w={W} (rullende vs. EWMA) vs. TSMOM — Fuld periode\n"
         f"Fama-French 49 industrier "
         f"({pd.to_datetime(FULL_START).year}–{pd.to_datetime(FULL_END).year})  "
-        f"|  Vol → EPO isolerer korrelationsshrinkagens bidrag",
+        f"|  Rullende = {RISK_WINDOW}m vindue  |  EWMA span={RISK_WINDOW}m",
         fontsize=11, fontweight="bold",
     )
     ax.legend(fontsize=9, frameon=True, framealpha=0.9, edgecolor="#ccc")
@@ -543,19 +550,32 @@ def main():
     print("\nBeregner TSMOM-signal (deles af alle tre strategier)...")
     tsmom = compute_tsmom_signal(excess, lookback=LOOKBACK_MONTHS)
 
-    # ── 3. Risikomodel (til EPO) ───────────────────────────────
-    print(f"\nBygger risikomodel ({RISK_WINDOW}m, θ={CORR_PRESHRINK})...")
+    # ── 3. Risikomodeller ──────────────────────────────────────
+    print(f"\nBygger rullende risikomodel ({RISK_WINDOW}m, θ={CORR_PRESHRINK})...")
     corr_shrunk, vols = compute_risk_model(
         excess, window=RISK_WINDOW,
         theta=CORR_PRESHRINK, verbose=True
     )
 
+    print(f"\nBygger EWMA risikomodel (span={RISK_WINDOW}m, θ={CORR_PRESHRINK})...")
+    corr_ewm, vols_ewm = compute_risk_model_ewm(
+        excess, span=RISK_WINDOW,
+        min_periods=max(12, RISK_WINDOW // 2),
+        theta=CORR_PRESHRINK, verbose=True
+    )
+
     # ── 4. Backtest ────────────────────────────────────────────
-    print(f"\nBacktester EPO w={W} (TSMOM-signal + korrelationsshrinkage)...")
+    print(f"\nBacktester EPO w={W} (rullende kovarians)...")
     epo_full = backtest_epo_fixed_w(
         excess, tsmom, corr_shrunk, vols, GAMMA, w=W
     )
     epo_full.name = f"EPO w={W}"
+
+    print(f"Backtester EPO w={W} (EWMA kovarians)...")
+    epo_ewm_full = backtest_epo_fixed_w(
+        excess, tsmom, corr_ewm, vols_ewm, GAMMA, w=W
+    )
+    epo_ewm_full.name = f"EPO w={W} EWMA"
 
     print(f"Backtester EPO Long-Only w={W}...")
     epo_lo_full = backtest_epo_long_only(excess, tsmom, corr_shrunk, vols, GAMMA, w=W)
@@ -572,15 +592,17 @@ def main():
     )
 
     # ── 5. Delperioder ─────────────────────────────────────────
-    all_epo, all_ew, all_vol, labels = [], [], [], []
+    all_epo, all_epo_ewm, all_ew, all_vol, labels = [], [], [], [], []
 
     for start, end, label in PERIODS:
-        epo_sub    = subset(epo_full,    start, end).dropna()
-        epo_lo_sub = subset(epo_lo_full, start, end).dropna()
-        ew_sub     = subset(ew_full,     start, end).dropna()
-        vol_sub    = subset(vol_full,    start, end).dropna()
+        epo_sub     = subset(epo_full,     start, end).dropna()
+        epo_ewm_sub = subset(epo_ewm_full, start, end).dropna()
+        epo_lo_sub  = subset(epo_lo_full,  start, end).dropna()
+        ew_sub      = subset(ew_full,      start, end).dropna()
+        vol_sub     = subset(vol_full,     start, end).dropna()
 
         all_epo.append(epo_sub)
+        all_epo_ewm.append(epo_ewm_sub)
         all_ew.append(ew_sub)
         all_vol.append(vol_sub)
         labels.append(label)
@@ -592,10 +614,11 @@ def main():
               f"{'SR':>7} {'Kum.':>9} {'WinRate':>8} {'MaxDD':>8}")
         print(f"  {'-'*83}")
         for s, lbl in [
-            (epo_sub,    f"EPO Long-Short w={W}"),
-            (epo_lo_sub, f"EPO Long-Only  w={W}"),
-            (vol_sub,    f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
-            (ew_sub,     "TSMOM EW (1/N)"),
+            (epo_sub,     f"EPO Long-Short w={W} (rullende)"),
+            (epo_ewm_sub, f"EPO Long-Short w={W} (EWMA)"),
+            (epo_lo_sub,  f"EPO Long-Only  w={W}"),
+            (vol_sub,     f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
+            (ew_sub,      "TSMOM EW (1/N)"),
         ]:
             r = summarise(s, lbl)
             print(
@@ -616,10 +639,11 @@ def main():
           f"{'SR':>7} {'Kum.':>9} {'WinRate':>8} {'MaxDD':>8}")
     print(f"  {'-'*83}")
     for s, lbl in [
-        (epo_full,    f"EPO Long-Short w={W}"),
-        (epo_lo_full, f"EPO Long-Only  w={W}"),
-        (vol_full,    f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
-        (ew_full,     "TSMOM EW (1/N)"),
+        (epo_full,     f"EPO Long-Short w={W} (rullende)"),
+        (epo_ewm_full, f"EPO Long-Short w={W} (EWMA)"),
+        (epo_lo_full,  f"EPO Long-Only  w={W}"),
+        (vol_full,     f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
+        (ew_full,      "TSMOM EW (1/N)"),
     ]:
         r = summarise(s.dropna(), lbl)
         print(
@@ -645,8 +669,8 @@ def main():
 
     # ── 7. Figurer ─────────────────────────────────────────────
     print("\nGenererer figurer...")
-    plot_subperiods(all_epo, all_ew, all_vol, labels)
-    plot_combined_cumulative(epo_full, ew_full, vol_full)
+    plot_subperiods(all_epo, all_epo_ewm, all_ew, all_vol, labels)
+    plot_combined_cumulative(epo_full, epo_ewm_full, ew_full, vol_full)
     print("\nFærdig.")
 
 
