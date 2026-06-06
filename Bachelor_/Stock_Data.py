@@ -26,8 +26,9 @@ from Best_stocks_from_industry import DAILY_RETS_PATH, DAILY_PRICES_PATH, SECTOR
 from Investeringsomkostninger import (
     plot_turnover,
     compute_net_returns,
-    plot_net_cumulative_vs_cost
-    )
+    plot_net_cumulative_vs_cost,
+    print_turnover_stats,
+)
 
 from constrain_epo import (print_violation_report, plot_violation_heatmap,
                             WEIGHT_BOUND)
@@ -1572,6 +1573,14 @@ def main():
         end=PERIOD_END
     )
 
+    # ── Tabel 10: Turnover statistik (inkl. Long Only) ────────
+    print_turnover_stats(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        corr_raw, vols_raw, gamma=GAMMA,
+        start=PERIOD_START, end=PERIOD_END, w=W,
+    )
+
+    # ── Figur 10: SR som funktion af c ────────────────────────
     plot_net_cumulative_vs_cost(
         monthly_excess, xsmom, corr_shrunk, vols,
         gamma=GAMMA, start="2023-01-01", end="2025-12-31", w=0.75

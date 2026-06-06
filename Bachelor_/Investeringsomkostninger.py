@@ -5,7 +5,37 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.dates as mdates
 
-from Equity_1 import epo_weights
+from Equity_1 import epo_weights, backtest_strategy
+
+
+# ── Long-only hjælpefunktioner (lokale, uden circular import) ──
+
+def _epo_weights_long_only(signal, corr, vols, gamma, w):
+    raw = epo_weights(signal, corr, vols, gamma, w)
+    if len(raw) == 0:
+        return pd.Series(dtype=float)
+    lo = raw.clip(lower=0)
+    total = lo.sum()
+    if total <= 0:
+        return pd.Series(dtype=float)
+    return lo / total
+
+
+def _backtest_lo_monthly(monthly_excess, xsmom, corr_dict, vols_dict,
+                          gamma, w, start, end):
+    """Månedlig rebalancering long-only EPO — returnerer afkastserie."""
+    s_dt, e_dt = pd.to_datetime(start), pd.to_datetime(end)
+    risk_dates = set(corr_dict)
+    sig_dates  = set(xsmom.index)
+
+    def weight_fn(date):
+        if date not in risk_dates or date not in sig_dates:
+            return pd.Series(dtype=float)
+        return _epo_weights_long_only(
+            xsmom.loc[date], corr_dict[date], vols_dict[date], gamma, w)
+
+    full = backtest_strategy(monthly_excess, weight_fn, name=f"LO_w{w:.2f}")
+    return full.loc[s_dt:e_dt]
 
 
 # ── 1. Turnover-beregning ─────────────────────────────────────
@@ -93,6 +123,41 @@ def compute_turnover_annual_rebalance(monthly_excess, xsmom, corr_dict,
     return pd.Series(turnover, index=dates, name=f"Årlig_reb_w{w:.2f}")
 
 
+def compute_turnover_long_only(monthly_excess, xsmom, corr_dict, vols_dict,
+                                gamma, w, start, end):
+    """
+    Månedlig turnover for long-only EPO = 0.5 * sum(|w_t - w_{t-1}|)
+    Bruger clip+renormalisér post-processing (ingen shorts).
+    """
+    s, e = pd.to_datetime(start), pd.to_datetime(end)
+    idx  = monthly_excess.loc[s:e].index
+    risk_dates = set(corr_dict)
+    sig_dates  = set(xsmom.index)
+
+    prev_wts = None
+    turnover, dates = [], []
+
+    for date in idx:
+        if date not in risk_dates or date not in sig_dates:
+            continue
+
+        wts = _epo_weights_long_only(xsmom.loc[date], corr_dict[date],
+                                      vols_dict[date], gamma, w)
+        if len(wts) == 0:
+            continue
+
+        if prev_wts is not None:
+            all_tickers = wts.index.union(prev_wts.index)
+            w_cur  = wts.reindex(all_tickers).fillna(0.0)
+            w_prev = prev_wts.reindex(all_tickers).fillna(0.0)
+            turnover.append(0.5 * (w_cur - w_prev).abs().sum())
+            dates.append(date)
+
+        prev_wts = wts
+
+    return pd.Series(turnover, index=dates, name=f"EPO_LO_w{w:.2f}")
+
+
 # ── 2. Turnover-statistik ─────────────────────────────────────
 
 def print_turnover_stats(monthly_excess, xsmom, corr_shrunk, vols,
@@ -103,17 +168,20 @@ def print_turnover_stats(monthly_excess, xsmom, corr_shrunk, vols,
     Printer antal turnovers og gennemsnitlig turnover per handel
     for månedlig og årlig rebalancering samt MVO i perioden.
     """
-    print("\n" + "=" * 65)
-    print(f"TURNOVER STATISTIK — {start[:7]} → {end[:7]}")
-    print("=" * 65)
-    print(f"  {'Strategi':<35} {'Antal TO':>10} {'Gns. TO':>10} {'Total TO':>10}")
-    print("-" * 65)
+    print("\n" + "=" * 74)
+    print(f"TABEL 10 — TURNOVER STATISTIK  ({start[:7]} → {end[:7]})")
+    print("=" * 74)
+    print(f"  {'Strategi':<40} {'Antal TO':>10} {'Gns. TO':>10} {'Total TO':>10}")
+    print("-" * 74)
 
     strategies = {
         f"Månedlig reb. EPO w={w}": compute_turnover_series(
             monthly_excess, xsmom, corr_shrunk, vols,
             gamma, w, start, end),
         f"Årlig reb. EPO w={w}": compute_turnover_annual_rebalance(
+            monthly_excess, xsmom, corr_shrunk, vols,
+            gamma, w, start, end),
+        f"Long Only månedlig reb. EPO w={w}": compute_turnover_long_only(
             monthly_excess, xsmom, corr_shrunk, vols,
             gamma, w, start, end),
         "Std MVO": compute_turnover_series(
@@ -128,9 +196,9 @@ def print_turnover_stats(monthly_excess, xsmom, corr_shrunk, vols,
         n      = len(to_series)
         mean   = to_series.mean() * 100 if n > 0 else 0
         total  = to_series.sum()  * 100 if n > 0 else 0
-        print(f"  {name:<35} {n:>10} {mean:>9.1f}% {total:>9.1f}%")
+        print(f"  {name:<40} {n:>10} {mean:>9.1f}% {total:>9.1f}%")
 
-    print("=" * 65)
+    print("=" * 74)
     return strategies
 
 
@@ -281,10 +349,14 @@ def plot_net_cumulative_vs_cost(monthly_excess, xsmom, corr_shrunk, vols,
                                  gamma, start="2023-01-01", end="2025-12-31",
                                  w=0.75):
     """
-    Viser kumuleret nettoafkast som funktion af transaktionsomkostninger c
-    for månedlig og årlig rebalancering.
-    X-akse: c i basispoint (0 → 100)
-    Y-akse: kumuleret nettoafkast
+    Figur 10: Sharpe Ratio som funktion af transaktionsomkostninger c (0–150 bp)
+    for tre strategier:
+      1. Månedlig rebalancering EPO w (long/short)
+      2. Årlig rebalancering EPO w
+      3. Long Only månedlig rebalancering EPO w
+
+    Lodret stiplet linje ved breakeven (månedlig l/s = årlig i SR-termer).
+    Gemmes som Figur_10_SR_vs_c.png
     """
     from Equity_1 import build_epo_panel
     from Stock_Data import backtest_annual_rebalance_period, subset
@@ -292,77 +364,82 @@ def plot_net_cumulative_vs_cost(monthly_excess, xsmom, corr_shrunk, vols,
     s, e = start, end
 
     # ── Bruttoafkast ──────────────────────────────────────────
-    epo_panel  = build_epo_panel(
+    epo_panel = build_epo_panel(
         monthly_excess, xsmom, corr_shrunk, vols, gamma, [w])
-    gross_mon  = subset(epo_panel[f"EPO_w_{w:.2f}"], s, e)
-    gross_ann  = backtest_annual_rebalance_period(
+    gross_mon = subset(epo_panel[f"EPO_w_{w:.2f}"], s, e)
+    gross_ann = backtest_annual_rebalance_period(
         monthly_excess, xsmom, corr_shrunk, vols,
         gamma=gamma, w=w, start=s, end=e)
+    gross_lo  = _backtest_lo_monthly(
+        monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
 
     # ── Turnover serier ───────────────────────────────────────
     to_mon = compute_turnover_series(
-        monthly_excess, xsmom, corr_shrunk, vols,
-        gamma, w, s, e)
+        monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
     to_ann = compute_turnover_annual_rebalance(
-        monthly_excess, xsmom, corr_shrunk, vols,
-        gamma, w, s, e)
+        monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
+    to_lo  = compute_turnover_long_only(
+        monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
 
-    # ── Beregn kumuleret nettoafkast for c = 0 → 100 bp ──────
-    c_values = np.arange(0, 101, 1)          # 0, 1, 2, … 100 bp
-    cum_mon, cum_ann = [], []
+    # ── SR som funktion af c (0 → 150 bp) ────────────────────
+    c_values = np.arange(0, 151, 1)
 
+    def sharpe_at_c(gross, to, c_decimal):
+        tc  = (c_decimal * to).reindex(gross.index).fillna(0.0)
+        net = (gross - tc).dropna()
+        if len(net) < 3:
+            return np.nan
+        ann_ret = net.mean() * 12
+        ann_vol = net.std() * np.sqrt(12)
+        return ann_ret / ann_vol if ann_vol > 0 else np.nan
+
+    sr_mon, sr_ann, sr_lo = [], [], []
     for c_bp in c_values:
         c = c_bp / 10_000
+        sr_mon.append(sharpe_at_c(gross_mon, to_mon, c))
+        sr_ann.append(sharpe_at_c(gross_ann, to_ann, c))
+        sr_lo.append(sharpe_at_c(gross_lo,  to_lo,  c))
 
-        tc_mon  = (c * to_mon).reindex(gross_mon.index).fillna(0.0)
-        net_mon = gross_mon - tc_mon
-        cum_mon.append((1 + net_mon.dropna()).prod() - 1)
-
-        tc_ann  = (c * to_ann).reindex(gross_ann.index).fillna(0.0)
-        net_ann = gross_ann - tc_ann
-        cum_ann.append((1 + net_ann.dropna()).prod() - 1)
+    # ── Breakeven: månedlig l/s = årlig ──────────────────────
+    diff  = np.array(sr_mon) - np.array(sr_ann)
+    cross = np.where(np.diff(np.sign(diff)))[0]
+    cx    = c_values[cross[0]] if len(cross) > 0 else None
 
     # ── Plot ──────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    ax.plot(c_values, [r * 100 for r in cum_mon],
-            color="#2ca02c", linewidth=2,
-            label=f"Månedlig rebalancering EPO $w={w}$")
-    ax.plot(c_values, [r * 100 for r in cum_ann],
-            color="#1f77b4", linewidth=2, linestyle="--",
-            label=f"Årlig rebalancering EPO $w={w}$")
+    ax.plot(c_values, sr_mon, color="#2ca02c", linewidth=2,
+            label=f"Månedlig reb. EPO $w={w}$ (long/short)")
+    ax.plot(c_values, sr_ann, color="#1f77b4", linewidth=2, linestyle="--",
+            label=f"Årlig reb. EPO $w={w}$")
+    ax.plot(c_values, sr_lo,  color="#d62728", linewidth=2, linestyle="-.",
+            label=f"Long Only månedlig reb. EPO $w={w}$")
 
-    # Markér hvor de to kurver krydser
-    diff = np.array(cum_mon) - np.array(cum_ann)
-    cross = np.where(np.diff(np.sign(diff)))[0]
-    if len(cross) > 0:
-        cx = c_values[cross[0]]
-        cy = cum_mon[cross[0]] * 100
-        ax.axvline(cx, color="red", linewidth=1, linestyle=":",
-                   label=f"Breakeven: $c = {cx}$ bp")
-        ax.annotate(f"{cx} bp", xy=(cx, cy),
-                    xytext=(cx + 3, cy + 0.5),
-                    fontsize=10, color="red")
+    if cx is not None:
+        ax.axvline(cx, color="grey", linewidth=1.2, linestyle=":",
+                   label=f"Breakeven (månedlig l/s = årlig): $c = {cx}$ bp")
+        ax.annotate(f"{cx} bp",
+                    xy=(cx, ax.get_ylim()[0]),
+                    xytext=(cx + 2, ax.get_ylim()[0] + 0.05),
+                    fontsize=10, color="grey")
 
+    ax.axhline(0, color="black", linewidth=0.6, alpha=0.4)
     ax.set_title(
-        f"Kumuleret nettoafkast som funktion af transaktionsomkostninger\n"
-        f"Periode: {start[:7]} → {end[:7]}, EPO $w={w}$",
+        "Figur 10: Sharpe Ratio som funktion af transaktionsomkostninger (c) — 2023–2025",
         fontsize=13, pad=12)
     ax.set_xlabel("Transaktionsomkostninger $c$ (basispoint)", fontsize=11)
-    ax.set_ylabel("Kumuleret nettoafkast (%)", fontsize=11)
+    ax.set_ylabel("Sharpe Ratio", fontsize=11)
     ax.legend(fontsize=10, framealpha=0.8)
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_locator(plt.MultipleLocator(10))
 
     plt.tight_layout()
-    plt.savefig(
-        "/Users/emilbundesen/Desktop/Bachelor/Netto_vs_Omkostninger.png",
-        dpi=150, bbox_inches="tight")
+    plt.savefig("Figur_10_SR_vs_c.png", dpi=150, bbox_inches="tight")
+    print("Figur gemt: Figur_10_SR_vs_c.png")
     plt.show()
 
-    # Print breakeven
-    if len(cross) > 0:
-        print(f"\n  Breakeven ved c = {cx} bp")
-        print(f"  Ved c > {cx} bp outperformer årlig rebalancering månedlig.")
+    if cx is not None:
+        print(f"\n  Breakeven (månedlig l/s = årlig SR) ved c = {cx} bp")
+        print(f"  Ved c > {cx} bp har årlig rebalancering højere SR end månedlig l/s.")
     else:
-        print("\n  Ingen breakeven fundet i intervallet 0-100 bp.")
+        print("\n  Ingen breakeven fundet i intervallet 0–150 bp.")
