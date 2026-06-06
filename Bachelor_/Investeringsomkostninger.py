@@ -350,12 +350,11 @@ def plot_net_cumulative_vs_cost(monthly_excess, xsmom, corr_shrunk, vols,
                                  w=0.75):
     """
     Figur 10: Sharpe Ratio som funktion af transaktionsomkostninger c (0–150 bp)
-    for tre strategier:
+    for to strategier:
       1. Månedlig rebalancering EPO w (long/short)
       2. Årlig rebalancering EPO w
-      3. Long Only månedlig rebalancering EPO w
 
-    Lodret stiplet linje ved breakeven (månedlig l/s = årlig i SR-termer).
+    Lodret stiplet linje ved breakeven (månedlig = årlig i SR-termer).
     Gemmes som Figur_10_SR_vs_c.png
     """
     from Equity_1 import build_epo_panel
@@ -370,15 +369,11 @@ def plot_net_cumulative_vs_cost(monthly_excess, xsmom, corr_shrunk, vols,
     gross_ann = backtest_annual_rebalance_period(
         monthly_excess, xsmom, corr_shrunk, vols,
         gamma=gamma, w=w, start=s, end=e)
-    gross_lo  = _backtest_lo_monthly(
-        monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
 
     # ── Turnover serier ───────────────────────────────────────
     to_mon = compute_turnover_series(
         monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
     to_ann = compute_turnover_annual_rebalance(
-        monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
-    to_lo  = compute_turnover_long_only(
         monthly_excess, xsmom, corr_shrunk, vols, gamma, w, s, e)
 
     # ── SR som funktion af c (0 → 150 bp) ────────────────────
@@ -393,14 +388,13 @@ def plot_net_cumulative_vs_cost(monthly_excess, xsmom, corr_shrunk, vols,
         ann_vol = net.std() * np.sqrt(12)
         return ann_ret / ann_vol if ann_vol > 0 else np.nan
 
-    sr_mon, sr_ann, sr_lo = [], [], []
+    sr_mon, sr_ann = [], []
     for c_bp in c_values:
         c = c_bp / 10_000
         sr_mon.append(sharpe_at_c(gross_mon, to_mon, c))
         sr_ann.append(sharpe_at_c(gross_ann, to_ann, c))
-        sr_lo.append(sharpe_at_c(gross_lo,  to_lo,  c))
 
-    # ── Breakeven: månedlig l/s = årlig ──────────────────────
+    # ── Breakeven: månedlig = årlig SR ───────────────────────
     diff  = np.array(sr_mon) - np.array(sr_ann)
     cross = np.where(np.diff(np.sign(diff)))[0]
     cx    = c_values[cross[0]] if len(cross) > 0 else None
@@ -409,15 +403,13 @@ def plot_net_cumulative_vs_cost(monthly_excess, xsmom, corr_shrunk, vols,
     fig, ax = plt.subplots(figsize=(12, 6))
 
     ax.plot(c_values, sr_mon, color="#2ca02c", linewidth=2,
-            label=f"Månedlig reb. EPO $w={w}$ (long/short)")
+            label=f"Månedlig reb. EPO $w={w}$")
     ax.plot(c_values, sr_ann, color="#1f77b4", linewidth=2, linestyle="--",
             label=f"Årlig reb. EPO $w={w}$")
-    ax.plot(c_values, sr_lo,  color="#d62728", linewidth=2, linestyle="-.",
-            label=f"Long Only månedlig reb. EPO $w={w}$")
 
     if cx is not None:
         ax.axvline(cx, color="grey", linewidth=1.2, linestyle=":",
-                   label=f"Breakeven (månedlig l/s = årlig): $c = {cx}$ bp")
+                   label=f"Breakeven: $c = {cx}$ bp")
         ax.annotate(f"{cx} bp",
                     xy=(cx, ax.get_ylim()[0]),
                     xytext=(cx + 2, ax.get_ylim()[0] + 0.05),
