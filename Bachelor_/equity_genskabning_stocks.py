@@ -21,6 +21,7 @@ import numpy as np
 from Equity_1 import (
     compute_xsmom,
     compute_risk_model,
+    compute_risk_model_ewm,
     backtest_equal_weight,
     backtest_indmom,
     backtest_mvo_no_shrink,
@@ -57,14 +58,15 @@ CORR_PRESHRINK  = 0.05
 MIN_HISTORY_OOS = 1
 
 EQUITY_CONFIGS = [
-    {"name": "Equity 1", "risk_window": 60, "signal_window": 12, "signal_type": "TSMOM"},
-    {"name": "Equity 2", "risk_window": 36, "signal_window": 12, "signal_type": "TSMOM"},
-    {"name": "Equity 3", "risk_window": 24, "signal_window": 12, "signal_type": "TSMOM"},
-    {"name": "Equity 4", "risk_window": 24, "signal_window": 24, "signal_type": "TSMOM"},
-    {"name": "Equity 5", "risk_window": 24, "signal_window":  6, "signal_type": "TSMOM"},
-    {"name": "Equity 6", "risk_window": 24, "signal_window":  3, "signal_type": "TSMOM"},
-    {"name": "Equity 7", "risk_window": 24, "signal_window": 12, "signal_type": "XSMOM"},
-    {"name": "Equity 8", "risk_window": 24, "signal_window": 12, "signal_type": "TSMOM"},  # forankret EPO
+    {"name": "Equity 1", "risk_window": 60, "signal_window": 12, "signal_type": "TSMOM", "ewm": False},
+    {"name": "Equity 2", "risk_window": 36, "signal_window": 12, "signal_type": "TSMOM", "ewm": False},
+    {"name": "Equity 3", "risk_window": 24, "signal_window": 12, "signal_type": "TSMOM", "ewm": False},
+    {"name": "Equity 4", "risk_window": 24, "signal_window": 24, "signal_type": "TSMOM", "ewm": False},
+    {"name": "Equity 5", "risk_window": 24, "signal_window":  6, "signal_type": "TSMOM", "ewm": False},
+    {"name": "Equity 6", "risk_window": 24, "signal_window":  3, "signal_type": "TSMOM", "ewm": False},
+    {"name": "Equity 7", "risk_window": 24, "signal_window": 12, "signal_type": "XSMOM", "ewm": False},
+    {"name": "Equity 8", "risk_window": 24, "signal_window": 12, "signal_type": "TSMOM", "ewm": False},  # forankret EPO
+    {"name": "Equity 9", "risk_window": 60, "signal_window": 12, "signal_type": "TSMOM", "ewm": True},   # EWMA kovarians
 ]
 
 
@@ -85,12 +87,14 @@ def run_single_equity(monthly_excess, ticker_to_sector, config) -> tuple:
     risk_window   = config["risk_window"]
     signal_window = config["signal_window"]
     signal_type   = config["signal_type"]
+    use_ewm       = config.get("ewm", False)
     is_anchored   = (name == "Equity 8")
 
     print(f"\n{'='*65}")
     anchor_label = " [FORANKRET EPO → 1/N]" if is_anchored else ""
+    ewm_label    = " [EWMA kovarians]" if use_ewm else ""
     print(f"Kører {name} | Risikovindue: {risk_window}m | "
-          f"Signal: {signal_type} {signal_window}m{anchor_label}")
+          f"Signal: {signal_type} {signal_window}m{anchor_label}{ewm_label}")
     print(f"{'='*65}")
 
     if signal_type == "XSMOM":
@@ -101,12 +105,22 @@ def run_single_equity(monthly_excess, ticker_to_sector, config) -> tuple:
     else:
         raise ValueError(f"Ukendt signaltype: {signal_type}")
 
-    corr_shrunk, vols = compute_risk_model(
-        monthly_excess, window=risk_window,
-        theta=CORR_PRESHRINK, verbose=True)
-    corr_raw, vols_raw = compute_risk_model(
-        monthly_excess, window=risk_window,
-        theta=0.0, verbose=False)
+    if use_ewm:
+        corr_shrunk, vols = compute_risk_model_ewm(
+            monthly_excess, span=risk_window,
+            min_periods=max(12, risk_window // 2),
+            theta=CORR_PRESHRINK, verbose=True)
+        corr_raw, vols_raw = compute_risk_model_ewm(
+            monthly_excess, span=risk_window,
+            min_periods=max(12, risk_window // 2),
+            theta=0.0, verbose=False)
+    else:
+        corr_shrunk, vols = compute_risk_model(
+            monthly_excess, window=risk_window,
+            theta=CORR_PRESHRINK, verbose=True)
+        corr_raw, vols_raw = compute_risk_model(
+            monthly_excess, window=risk_window,
+            theta=0.0, verbose=False)
 
     ew_full     = backtest_equal_weight(monthly_excess)
     indmom_full = backtest_indmom(monthly_excess, signal)

@@ -214,6 +214,78 @@ def compute_risk_model(monthly_excess, window=RISK_WINDOW,
     return corr_dict, vols_dict
 
 
+def compute_risk_model_ewm(monthly_excess, span=60, min_periods=36,
+                            theta=CORR_PRESHRINK, verbose=True):
+    """
+    EWMA-baseret risikomodel: eksponentielt vægtet kovariansestimering.
+    Nyere observationer vægtes højere med decay-faktor λ = 1 - 2/(span+1).
+
+    span        : halvliv-ækvivalent til rullende vindue (standard: 60m)
+    min_periods : minimum antal måneder før estimatet bruges (standard: 36m)
+    theta       : pre-shrinkage mod identitetsmatrix (som compute_risk_model)
+    """
+    idx  = monthly_excess.index
+    cols = monthly_excess.columns
+
+    corr_dict = {}
+    vols_dict = {}
+
+    n_total = len(idx)
+    report  = max(1, n_total // 20)
+
+    for i in range(min_periods, n_total):
+        if verbose and i % report == 0:
+            pct = 100.0 * i / n_total
+            print(f"  EWM risk model: {pct:.1f}%", end="\r", flush=True)
+
+        date   = idx[i]
+        window = monthly_excess.iloc[:i]
+
+        # Kræv fuld historik: ingen aktier med NaN i de seneste min_periods måneder
+        recent = window.iloc[-min_periods:]
+        valid  = recent.columns[recent.notna().all(axis=0)]
+        if len(valid) < 2:
+            continue
+
+        W = window[valid]
+
+        # Eksponentielt vægtet kovariansmatrix
+        try:
+            Sigma_raw = W.ewm(span=span, min_periods=min_periods).cov().iloc[
+                -len(valid):
+            ].values.astype(np.float64)
+        except Exception:
+            continue
+
+        # Udtræk vol og korrelation
+        var_diag = np.diag(Sigma_raw)
+        nonzero  = var_diag > MIN_VOL ** 2
+        if nonzero.sum() < 2:
+            continue
+
+        Sigma_raw = Sigma_raw[np.ix_(nonzero, nonzero)]
+        c   = valid[nonzero]
+        vol = np.sqrt(np.diag(Sigma_raw))
+
+        denom = np.outer(vol, vol)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            corr_s = np.where(denom > 0, Sigma_raw / denom, 0.0)
+        np.fill_diagonal(corr_s, 1.0)
+        corr_s = np.clip(corr_s, -1.0, 1.0)
+
+        # Pre-shrinkage
+        n      = len(c)
+        corr_p = (1.0 - theta) * corr_s + theta * np.eye(n)
+
+        corr_dict[date] = pd.DataFrame(corr_p, index=c, columns=c)
+        vols_dict[date] = pd.Series(vol, index=c)
+
+    if verbose:
+        print("  EWM risk model: 100.0% — done.", flush=True)
+
+    return corr_dict, vols_dict
+
+
 #EPO vægte (lign. 19 og 20)
 def epo_weights(signal:  pd.Series,
                 corr:    pd.DataFrame,
