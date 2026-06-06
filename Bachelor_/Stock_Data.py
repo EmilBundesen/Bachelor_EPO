@@ -1338,11 +1338,11 @@ def print_sector_exposure_table(monthly_excess, xsmom, corr_shrunk, vols,
             continue
 
         yr = nxt_date.year
-        # Sum alle aktievægte inden for hver sektor denne måned
+        # Brutto-eksponering: sum af |vægt| per sektor denne måned
         month_sector = {}
         for ticker, weight in wts.items():
             sector = ticker_to_sector.get(ticker, "Ukendt")
-            month_sector[sector] = month_sector.get(sector, 0.0) + weight
+            month_sector[sector] = month_sector.get(sector, 0.0) + abs(weight)
         # Gem den månedlige sektorsum
         for sector, sec_weight in month_sector.items():
             exposure[yr].setdefault(sector, []).append(sec_weight)
@@ -1362,7 +1362,7 @@ def print_sector_exposure_table(monthly_excess, xsmom, corr_shrunk, vols,
     width  = 22 + col_w * (len(years) + 1)
     label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
     print("\n" + "=" * width)
-    print(f"GENNEMSNITLIG SEKTOREKSPONERING — {label}  ({start[:4]}–{end[:4]})")
+    print(f"GENNEMSNITLIG SEKTOREKSPONERING (BRUTTO) — {label}  ({start[:4]}–{end[:4]})")
     print("=" * width)
     header = f"  {'Sektor':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Gns.':>{col_w}}"
     print(header)
@@ -1375,24 +1375,12 @@ def print_sector_exposure_table(monthly_excess, xsmom, corr_shrunk, vols,
         row += f"{df.loc[sec, 'Gns.']:>{col_w}.2%}"
         print(row)
 
-    # Total eksponering per år (sum af abs. vægte = brutto-eksponering)
+    # Total brutto-eksponering per år
     print("-" * width)
-    long_row  = f"  {'Total long':<20}"
-    short_row = f"  {'Total short':<20}"
-    ge_row    = f"  {'Brutto (GE)':<20}"
+    ge_row = f"  {'Total (GE)':<20}"
     for yr in years:
-        long_val  = df[df[yr] > 0][yr].sum()
-        short_val = df[df[yr] < 0][yr].sum()
-        ge_val    = df[yr].abs().sum()
-        long_row  += f"{long_val:>{col_w}.2%}"
-        short_row += f"{short_val:>{col_w}.2%}"
-        ge_row    += f"{ge_val:>{col_w}.2%}"
-    # Gns. kolonnen
-    long_row  += f"{df[df['Gns.'] > 0]['Gns.'].sum():>{col_w}.2%}"
-    short_row += f"{df[df['Gns.'] < 0]['Gns.'].sum():>{col_w}.2%}"
-    ge_row    += f"{df['Gns.'].abs().sum():>{col_w}.2%}"
-    print(long_row)
-    print(short_row)
+        ge_row += f"{df[yr].sum():>{col_w}.2%}"
+    ge_row += f"{df['Gns.'].sum():>{col_w}.2%}"
     print(ge_row)
     print("=" * width)
 
