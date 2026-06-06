@@ -1201,6 +1201,86 @@ def print_scaled_annual_table(scaled_strategies: dict[str, pd.Series],
 
 
 
+def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
+                                     ticker_to_sector, gamma, w=0.75,
+                                     start="2023-01-01", end="2025-12-31"):
+    """
+    Tabel: sektorernes bidrag til det samlede merafkast for EPO w=0.75,
+    opdelt på 2023, 2024 og 2025.
+    Bidrag_sektor_år = Σ_måneder Σ_aktier∈sektor  vægt_i,t * r_i,t+1
+    """
+    s, e   = pd.to_datetime(start), pd.to_datetime(end)
+    idx    = monthly_excess.index
+    years  = sorted({d.year for d in idx if s <= d <= e})
+
+    risk_dates = set(corr_shrunk)
+    sig_dates  = set(xsmom.index)
+
+    # Akkumuler bidrag: {år: {sektor: float}}
+    contrib = {yr: {} for yr in years}
+
+    for t in range(len(idx) - 1):
+        date     = idx[t]
+        nxt_date = idx[t + 1]
+
+        if nxt_date < s or nxt_date > e:
+            continue
+        if date not in risk_dates or date not in sig_dates:
+            continue
+
+        wts = epo_weights(xsmom.loc[date], corr_shrunk[date],
+                          vols[date], gamma, w)
+        if len(wts) == 0:
+            continue
+
+        r = monthly_excess.loc[nxt_date].reindex(wts.index).dropna()
+        w_aln = wts.reindex(r.index).dropna()
+        r_aln = r.reindex(w_aln.index)
+
+        yr = nxt_date.year
+        for ticker in w_aln.index:
+            sector = ticker_to_sector.get(ticker, "Ukendt")
+            contrib[yr][sector] = (contrib[yr].get(sector, 0.0)
+                                   + w_aln[ticker] * r_aln[ticker])
+
+    # Byg DataFrame: rækker = sektorer, kolonner = år
+    all_sectors = sorted({sec for yr_dict in contrib.values()
+                          for sec in yr_dict})
+    df = pd.DataFrame(
+        {yr: {sec: contrib[yr].get(sec, 0.0) for sec in all_sectors}
+         for yr in years}
+    )
+    df["Total"] = df.sum(axis=1)
+    df = df.sort_values("Total", ascending=False)
+
+    # Totallinje
+    totals = df.sum()
+
+    col_w = 12
+    width  = 22 + col_w * (len(years) + 1)
+    print("\n" + "=" * width)
+    print(f"SEKTORBIDRAG TIL MERAFKAST — EPO w={int(w*100)}%  ({start[:4]}–{end[:4]})")
+    print("=" * width)
+    header = f"  {'Sektor':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Total':>{col_w}}"
+    print(header)
+    print("-" * width)
+
+    for sec in df.index:
+        row = f"  {sec:<20}"
+        for yr in years:
+            row += f"{df.loc[sec, yr]:>{col_w}.2%}"
+        row += f"{df.loc[sec, 'Total']:>{col_w}.2%}"
+        print(row)
+
+    print("-" * width)
+    total_row = f"  {'Total':<20}"
+    for yr in years:
+        total_row += f"{totals[yr]:>{col_w}.2%}"
+    total_row += f"{totals['Total']:>{col_w}.2%}"
+    print(total_row)
+    print("=" * width)
+
+
 def print_long_only_summary_table(lo_strategies: dict[str, pd.Series],
                                    start="2023-01-01", end="2025-12-31"):
     """
@@ -1422,6 +1502,13 @@ def main():
         start=PERIOD_START, end=PERIOD_END,
     )
     print_long_only_summary_table(lo_strategies, start=PERIOD_START, end=PERIOD_END)
+
+    # ── 7c. Sektorbidrag EPO w=0.75 ──────────────────────────
+    print_sector_contribution_table(
+        monthly_excess, xsmom, corr_shrunk, vols,
+        ticker_to_sector, gamma=GAMMA, w=W,
+        start=PERIOD_START, end=PERIOD_END,
+    )
 
     # ── 8. Long-Only EPO tabel ────────────────────────────────
     print_long_only_performance_table(
