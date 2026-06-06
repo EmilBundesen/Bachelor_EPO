@@ -292,27 +292,29 @@ def print_industry_contribution_table(excess, tsmom, corr_dict, vols_dict,
 
     n_months  = len(port_rets)
     n_years   = n_months / 12.0
-    geo_total = np.prod([1 + r for r in port_rets]) - 1 if port_rets else np.nan
-    ann_total = (1 + geo_total) ** (1 / n_years) - 1 if n_years > 0 else np.nan
+    geo_cum   = np.prod([1 + r for r in port_rets]) - 1 if port_rets else np.nan
+    geo_ann   = (1 + geo_cum) ** (1 / n_years) - 1 if n_years > 0 else np.nan
 
-    # Gns. månedligt bidrag → annualiseret (× 12)
+    # Aritmetisk bidrag per industri (sommer til total)
     contrib_ann = {ind: v / n_years for ind, v in contrib.items()}
+    total_arith_ann = sum(contrib_ann.values())
+    total_arith_cum = sum(contrib.values())
     inds = sorted(contrib_ann, key=contrib_ann.get, reverse=True)
 
     label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
     col_w = 18
     width = 24 + col_w * 2
     print("\n" + "=" * width)
-    print(f"GNS. ÅRLIGT INDUSTRIBIDRAG — {label}  ({start[:4]}–{end[:4]})")
+    print(f"GNS. INDUSTRIBIDRAG — {label}  ({start[:4]}–{end[:4]})")
+    print(f"Bidrag er aritmetiske (Σ w·r) og summer til total.")
     print("=" * width)
-    print(f"  {'Industri':<22} {'Gns. årligt bidrag':>{col_w}} {'Kumuleret bidrag':>{col_w}}")
+    print(f"  {'Industri':<22} {'Gns. årligt bidrag':>{col_w}} {'Aritm. kum. bidrag':>{col_w}}")
     print("-" * width)
     for ind in inds:
-        ann_c = contrib_ann[ind]
-        cum_c = contrib[ind]
-        print(f"  {ind:<22} {ann_c:>{col_w}.4%} {cum_c:>{col_w}.2%}")
+        print(f"  {ind:<22} {contrib_ann[ind]:>{col_w}.4%} {contrib[ind]:>{col_w}.2%}")
     print("-" * width)
-    print(f"  {'Total':<22} {ann_total:>{col_w}.4%} {geo_total:>{col_w}.2%}")
+    print(f"  {'Sum (aritm.)':<22} {total_arith_ann:>{col_w}.4%} {total_arith_cum:>{col_w}.2%}")
+    print(f"  {'Porto. geo. ann.':<22} {geo_ann:>{col_w}.4%} {geo_cum:>{col_w}.2%}")
     print("=" * width)
 
 
