@@ -29,7 +29,8 @@ from Investeringsomkostninger import (
     plot_net_cumulative_vs_cost
     )
 
-from constrain_epo import (print_violation_report, plot_violation_heatmap)
+from constrain_epo import (print_violation_report, plot_violation_heatmap,
+                            WEIGHT_BOUND)
 
 # Vær opmærksom på disse konstanter
 START_DATE        = "2010-01-01"
@@ -1217,7 +1218,9 @@ def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
     sig_dates  = set(xsmom.index)
 
     # Akkumuler bidrag: {år: {sektor: float}}
-    contrib = {yr: {} for yr in years}
+    # og månedlige porteføljeafkast per år til geometrisk total
+    contrib      = {yr: {} for yr in years}
+    port_rets_yr = {yr: [] for yr in years}
 
     for t in range(len(idx) - 1):
         date     = idx[t]
@@ -1238,10 +1241,19 @@ def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
         r_aln = r.reindex(w_aln.index)
 
         yr = nxt_date.year
+        port_ret = (w_aln * r_aln.reindex(w_aln.index)).sum()
+        port_rets_yr[yr].append(port_ret)
+
         for ticker in w_aln.index:
             sector = ticker_to_sector.get(ticker, "Ukendt")
             contrib[yr][sector] = (contrib[yr].get(sector, 0.0)
                                    + w_aln[ticker] * r_aln[ticker])
+
+    # Geometrisk kumuleret årsafkast (matcher de øvrige tabeller)
+    geo_yr = {yr: (np.prod([1 + r for r in rets]) - 1) if rets else np.nan
+              for yr, rets in port_rets_yr.items()}
+    all_port_rets = [r for rets in port_rets_yr.values() for r in rets]
+    geo_total = np.prod([1 + r for r in all_port_rets]) - 1 if all_port_rets else np.nan
 
     # Byg DataFrame: rækker = sektorer, kolonner = år
     all_sectors = sorted({sec for yr_dict in contrib.values()
@@ -1253,8 +1265,10 @@ def print_sector_contribution_table(monthly_excess, xsmom, corr_shrunk, vols,
     df["Total"] = df.sum(axis=1)
     df = df.sort_values("Total", ascending=False)
 
-    # Totallinje
-    totals = df.sum()
+    # Totallinje: geometrisk kumuleret (konsistent med øvrige tabeller)
+    totals = pd.Series(
+        {yr: geo_yr[yr] for yr in years} | {"Total": geo_total}
+    )
 
     col_w = 12
     width  = 22 + col_w * (len(years) + 1)
@@ -1531,14 +1545,14 @@ def main():
     # Violations rapport — alle w-værdier
     print_violation_report(
         monthly_excess, xsmom, corr_shrunk, vols,
-        gamma=GAMMA, bound=0.08,
+        gamma=GAMMA, bound=WEIGHT_BOUND,
         start="2020-01-01", end="2025-12-31",
     )
 
     # Heatmap for w=0.75
     plot_violation_heatmap(
         monthly_excess, xsmom, corr_shrunk, vols,
-        gamma=GAMMA, w=0.75, bound=0.08,
+        gamma=GAMMA, w=0.75, bound=WEIGHT_BOUND,
         start="2020-01-01", end="2025-12-31",
     )
 
