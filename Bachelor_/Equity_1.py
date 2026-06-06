@@ -220,42 +220,56 @@ def compute_risk_model_ewm(monthly_excess, span=60, min_periods=36,
     EWMA-baseret risikomodel: eksponentielt vægtet kovariansestimering.
     Nyere observationer vægtes højere med decay-faktor λ = 1 - 2/(span+1).
 
+    Beregner ewm().cov() én gang på hele datasættet og slår op per dato
+    — samme køretid som den rullende model.
+
     span        : halvliv-ækvivalent til rullende vindue (standard: 60m)
     min_periods : minimum antal måneder før estimatet bruges (standard: 36m)
     theta       : pre-shrinkage mod identitetsmatrix (som compute_risk_model)
     """
-    idx  = monthly_excess.index
-    cols = monthly_excess.columns
+    if verbose:
+        print(f"  EWM risk model: beregner ewm(span={span}).cov() ...",
+              flush=True)
 
+    # Ét enkelt kald på hele datasættet — pandas returnerer MultiIndex
+    # DataFrame med (dato, kolonne) som index
+    ewm_cov_full = monthly_excess.ewm(
+        span=span, min_periods=min_periods
+    ).cov()
+
+    idx       = monthly_excess.index
+    cols      = monthly_excess.columns
     corr_dict = {}
     vols_dict = {}
+    n_total   = len(idx)
+    report    = max(1, n_total // 20)
 
-    n_total = len(idx)
-    report  = max(1, n_total // 20)
-
-    for i in range(min_periods, n_total):
+    for i, date in enumerate(idx):
         if verbose and i % report == 0:
-            pct = 100.0 * i / n_total
-            print(f"  EWM risk model: {pct:.1f}%", end="\r", flush=True)
+            print(f"  EWM risk model: {100*i/n_total:.1f}%",
+                  end="\r", flush=True)
 
-        date   = idx[i]
-        window = monthly_excess.iloc[:i]
-
-        # Kræv fuld historik: ingen aktier med NaN i de seneste min_periods måneder
-        recent = window.iloc[-min_periods:]
-        valid  = recent.columns[recent.notna().all(axis=0)]
-        if len(valid) < 2:
+        # Udtræk kovariansmatrix for denne dato
+        if date not in ewm_cov_full.index.get_level_values(0):
             continue
-
-        W = window[valid]
-
-        # Eksponentielt vægtet kovariansmatrix
         try:
-            Sigma_raw = W.ewm(span=span, min_periods=min_periods).cov().iloc[
-                -len(valid):
-            ].values.astype(np.float64)
+            Sigma_raw = ewm_cov_full.loc[date].values.astype(np.float64)
         except Exception:
             continue
+
+        if Sigma_raw.shape[0] != Sigma_raw.shape[1]:
+            continue
+
+        # Kræv at aktien har fuld historik de seneste min_periods måneder
+        recent = monthly_excess.iloc[max(0, i - min_periods): i]
+        valid_mask = recent.notna().all(axis=0).values
+        valid_cols = cols[valid_mask]
+        if len(valid_cols) < 2:
+            continue
+
+        # Begræns til gyldige aktier
+        idx_pos = [list(cols).index(c) for c in valid_cols]
+        Sigma_raw = Sigma_raw[np.ix_(idx_pos, idx_pos)]
 
         # Udtræk vol og korrelation
         var_diag = np.diag(Sigma_raw)
@@ -264,7 +278,7 @@ def compute_risk_model_ewm(monthly_excess, span=60, min_periods=36,
             continue
 
         Sigma_raw = Sigma_raw[np.ix_(nonzero, nonzero)]
-        c   = valid[nonzero]
+        c   = valid_cols[nonzero]
         vol = np.sqrt(np.diag(Sigma_raw))
 
         denom = np.outer(vol, vol)
@@ -273,7 +287,6 @@ def compute_risk_model_ewm(monthly_excess, span=60, min_periods=36,
         np.fill_diagonal(corr_s, 1.0)
         corr_s = np.clip(corr_s, -1.0, 1.0)
 
-        # Pre-shrinkage
         n      = len(c)
         corr_p = (1.0 - theta) * corr_s + theta * np.eye(n)
 
