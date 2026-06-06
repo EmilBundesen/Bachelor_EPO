@@ -1338,11 +1338,16 @@ def print_sector_exposure_table(monthly_excess, xsmom, corr_shrunk, vols,
             continue
 
         yr = nxt_date.year
+        # Sum alle aktievægte inden for hver sektor denne måned
+        month_sector = {}
         for ticker, weight in wts.items():
             sector = ticker_to_sector.get(ticker, "Ukendt")
-            exposure[yr].setdefault(sector, []).append(weight)
+            month_sector[sector] = month_sector.get(sector, 0.0) + weight
+        # Gem den månedlige sektorsum
+        for sector, sec_weight in month_sector.items():
+            exposure[yr].setdefault(sector, []).append(sec_weight)
 
-    # Gennemsnitlig eksponering per sektor per år
+    # Gennemsnitlig månedlig sektoreksponering per år
     all_sectors = sorted({sec for yr_dict in exposure.values()
                           for sec in yr_dict})
     df = pd.DataFrame(
