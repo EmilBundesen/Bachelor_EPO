@@ -37,6 +37,7 @@ from Equity_1 import (
     compute_risk_model,
     backtest_strategy,
     backtest_epo_fixed_w,
+    epo_weights,
     performance_summary,
     subset,
     get_monthly_return,
@@ -220,6 +221,179 @@ def summarise(series: pd.Series, label: str) -> dict:
     return d
 
 
+# ── Long-Only EPO ─────────────────────────────────────────────────────────────
+
+def epo_weights_long_only(signal, corr, vols, gamma, w):
+    raw = epo_weights(signal, corr, vols, gamma, w)
+    if len(raw) == 0:
+        return pd.Series(dtype=float)
+    long_only = raw.clip(lower=0)
+    total = long_only.sum()
+    if total <= 0:
+        return pd.Series(dtype=float)
+    return long_only / total
+
+
+def backtest_epo_long_only(excess, tsmom, corr_dict, vols_dict, gamma, w):
+    risk_dates = set(corr_dict)
+    sig_dates  = set(tsmom.index)
+
+    def weight_fn(date):
+        if date not in risk_dates or date not in sig_dates:
+            return pd.Series(dtype=float)
+        return epo_weights_long_only(
+            tsmom.loc[date], corr_dict[date], vols_dict[date], gamma, w)
+
+    return backtest_strategy(excess, weight_fn, name=f"EPO Long-Only w={w}")
+
+
+# ── Industribidrag og eksponering ──────────────────────────────────────────────
+
+def print_industry_contribution_table(excess, tsmom, corr_dict, vols_dict,
+                                       gamma, w=0.75,
+                                       start="2023-01-01", end="2025-12-31",
+                                       long_only=False):
+    """
+    Afkastbidrag per industri (weight × return) summeret per år,
+    med geometrisk kumuleret total. Sorteret efter totalbidrag.
+    """
+    s, e   = pd.to_datetime(start), pd.to_datetime(end)
+    idx    = excess.index
+    years  = sorted({d.year for d in idx if s <= d <= e})
+
+    risk_dates = set(corr_dict)
+    sig_dates  = set(tsmom.index)
+
+    contrib      = {yr: {} for yr in years}
+    port_rets_yr = {yr: [] for yr in years}
+
+    for t in range(len(idx) - 1):
+        date     = idx[t]
+        nxt_date = idx[t + 1]
+        if nxt_date < s or nxt_date > e:
+            continue
+        if date not in risk_dates or date not in sig_dates:
+            continue
+
+        wts = (epo_weights_long_only(tsmom.loc[date], corr_dict[date],
+                                     vols_dict[date], gamma, w)
+               if long_only else
+               epo_weights(tsmom.loc[date], corr_dict[date],
+                           vols_dict[date], gamma, w))
+        if len(wts) == 0:
+            continue
+
+        r     = excess.loc[nxt_date].reindex(wts.index).dropna()
+        w_aln = wts.reindex(r.index).dropna()
+        r_aln = r.reindex(w_aln.index)
+
+        yr = nxt_date.year
+        port_rets_yr[yr].append((w_aln * r_aln).sum())
+        for ind in w_aln.index:
+            contrib[yr][ind] = contrib[yr].get(ind, 0.0) + w_aln[ind] * r_aln[ind]
+
+    geo_yr    = {yr: (np.prod([1 + r for r in rets]) - 1) if rets else np.nan
+                 for yr, rets in port_rets_yr.items()}
+    all_rets  = [r for rets in port_rets_yr.values() for r in rets]
+    geo_total = np.prod([1 + r for r in all_rets]) - 1 if all_rets else np.nan
+
+    all_inds = sorted({ind for d in contrib.values() for ind in d})
+    df = pd.DataFrame({yr: {ind: contrib[yr].get(ind, 0.0) for ind in all_inds}
+                       for yr in years})
+    df["Total"] = df.sum(axis=1)
+    df = df.sort_values("Total", ascending=False)
+    totals = pd.Series({yr: geo_yr[yr] for yr in years} | {"Total": geo_total})
+
+    label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
+    col_w = 12
+    width = 22 + col_w * (len(years) + 1)
+    print("\n" + "=" * width)
+    print(f"INDUSTRIBIDRAG TIL MERAFKAST — {label}  ({start[:4]}–{end[:4]})")
+    print("=" * width)
+    print(f"  {'Industri':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Total':>{col_w}}")
+    print("-" * width)
+    for ind in df.index:
+        row = f"  {ind:<20}"
+        for yr in years:
+            row += f"{df.loc[ind, yr]:>{col_w}.2%}"
+        row += f"{df.loc[ind, 'Total']:>{col_w}.2%}"
+        print(row)
+    print("-" * width)
+    total_row = f"  {'Total (geo.)':<20}"
+    for yr in years:
+        total_row += f"{totals[yr]:>{col_w}.2%}"
+    total_row += f"{totals['Total']:>{col_w}.2%}"
+    print(total_row)
+    print("=" * width)
+
+
+def print_industry_exposure_table(excess, tsmom, corr_dict, vols_dict,
+                                   gamma, w=0.75,
+                                   start="2023-01-01", end="2025-12-31",
+                                   long_only=False):
+    """
+    Gennemsnitlig brutto-eksponering per industri per år (|vægt| summeret
+    per industri per måned → gennemsnit over måneder i året).
+    """
+    s, e   = pd.to_datetime(start), pd.to_datetime(end)
+    idx    = excess.index
+    years  = sorted({d.year for d in idx if s <= d <= e})
+
+    risk_dates = set(corr_dict)
+    sig_dates  = set(tsmom.index)
+    exposure   = {yr: {} for yr in years}
+
+    for t in range(len(idx) - 1):
+        date     = idx[t]
+        nxt_date = idx[t + 1]
+        if nxt_date < s or nxt_date > e:
+            continue
+        if date not in risk_dates or date not in sig_dates:
+            continue
+
+        wts = (epo_weights_long_only(tsmom.loc[date], corr_dict[date],
+                                     vols_dict[date], gamma, w)
+               if long_only else
+               epo_weights(tsmom.loc[date], corr_dict[date],
+                           vols_dict[date], gamma, w))
+        if len(wts) == 0:
+            continue
+
+        yr = nxt_date.year
+        for ind, weight in wts.items():
+            exposure[yr].setdefault(ind, []).append(abs(weight))
+
+    all_inds = sorted({ind for d in exposure.values() for ind in d})
+    df = pd.DataFrame(
+        {yr: {ind: np.mean(exposure[yr][ind]) if ind in exposure[yr] else 0.0
+              for ind in all_inds}
+         for yr in years})
+    df["Gns."] = df.mean(axis=1)
+    df = df.sort_values("Gns.", ascending=False)
+
+    label = f"EPO LONG-ONLY w={int(w*100)}%" if long_only else f"EPO w={int(w*100)}%"
+    col_w = 12
+    width = 22 + col_w * (len(years) + 1)
+    print("\n" + "=" * width)
+    print(f"GENNEMSNITLIG INDUSTRIEKSPONERING (BRUTTO) — {label}  ({start[:4]}–{end[:4]})")
+    print("=" * width)
+    print(f"  {'Industri':<20}" + "".join(f"{yr:>{col_w}}" for yr in years) + f"{'Gns.':>{col_w}}")
+    print("-" * width)
+    for ind in df.index:
+        row = f"  {ind:<20}"
+        for yr in years:
+            row += f"{df.loc[ind, yr]:>{col_w}.2%}"
+        row += f"{df.loc[ind, 'Gns.']:>{col_w}.2%}"
+        print(row)
+    print("-" * width)
+    ge_row = f"  {'Total (GE)':<20}"
+    for yr in years:
+        ge_row += f"{df[yr].sum():>{col_w}.2%}"
+    ge_row += f"{df['Gns.'].sum():>{col_w}.2%}"
+    print(ge_row)
+    print("=" * width)
+
+
 # ── Visualisering ─────────────────────────────────────────────────────────────
 
 def plot_subperiods(all_epo, all_ew, all_vol, labels):
@@ -400,6 +574,9 @@ def main():
     )
     epo_full.name = f"EPO w={W}"
 
+    print(f"Backtester EPO Long-Only w={W}...")
+    epo_lo_full = backtest_epo_long_only(excess, tsmom, corr_shrunk, vols, GAMMA, w=W)
+
     print("Backtester TSMOM Equal-Weighted (samme signal, 1/N vægte)...")
     ew_full = backtest_tsmom_ew(excess, tsmom)
 
@@ -415,29 +592,31 @@ def main():
     all_epo, all_ew, all_vol, labels = [], [], [], []
 
     for start, end, label in PERIODS:
-        epo_sub = subset(epo_full, start, end).dropna()
-        ew_sub  = subset(ew_full,  start, end).dropna()
-        vol_sub = subset(vol_full, start, end).dropna()
+        epo_sub    = subset(epo_full,    start, end).dropna()
+        epo_lo_sub = subset(epo_lo_full, start, end).dropna()
+        ew_sub     = subset(ew_full,     start, end).dropna()
+        vol_sub    = subset(vol_full,    start, end).dropna()
 
         all_epo.append(epo_sub)
         all_ew.append(ew_sub)
         all_vol.append(vol_sub)
         labels.append(label)
 
-        print(f"\n{'═'*65}")
+        print(f"\n{'═'*75}")
         print(f"  {label}")
-        print(f"{'═'*65}")
-        print(f"  {'Strategi':<38} {'Ann.afk':>9} {'Vol':>8} "
+        print(f"{'═'*75}")
+        print(f"  {'Strategi':<42} {'Ann.afk':>9} {'Vol':>8} "
               f"{'SR':>7} {'Kum.':>9} {'WinRate':>8} {'MaxDD':>8}")
-        print(f"  {'-'*78}")
+        print(f"  {'-'*83}")
         for s, lbl in [
-            (epo_sub, f"EPO w={W}"),
-            (vol_sub, f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
-            (ew_sub,  "TSMOM EW (1/N)"),
+            (epo_sub,    f"EPO Long-Short w={W}"),
+            (epo_lo_sub, f"EPO Long-Only  w={W}"),
+            (vol_sub,    f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
+            (ew_sub,     "TSMOM EW (1/N)"),
         ]:
             r = summarise(s, lbl)
             print(
-                f"  {r['Strategy']:<38} "
+                f"  {r['Strategy']:<42} "
                 f"{r['Ann. Return']:>8.2%} "
                 f"{r['Ann. Vol']:>7.2%} "
                 f"{r['Sharpe']:>7.3f} "
@@ -447,20 +626,21 @@ def main():
             )
 
     # ── 6. Samlet periode ──────────────────────────────────────
-    print(f"\n{'═'*65}")
+    print(f"\n{'═'*75}")
     print(f"  Samlet periode ({FULL_START[:4]}–{FULL_END[:4]})")
-    print(f"{'═'*65}")
-    print(f"  {'Strategi':<38} {'Ann.afk':>9} {'Vol':>8} "
+    print(f"{'═'*75}")
+    print(f"  {'Strategi':<42} {'Ann.afk':>9} {'Vol':>8} "
           f"{'SR':>7} {'Kum.':>9} {'WinRate':>8} {'MaxDD':>8}")
-    print(f"  {'-'*78}")
+    print(f"  {'-'*83}")
     for s, lbl in [
-        (epo_full, f"EPO w={W}"),
-        (vol_full, f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
-        (ew_full,  "TSMOM EW (1/N)"),
+        (epo_full,    f"EPO Long-Short w={W}"),
+        (epo_lo_full, f"EPO Long-Only  w={W}"),
+        (vol_full,    f"TSMOM Vol (σ_t={VOL_TARGET*100:.0f}%)"),
+        (ew_full,     "TSMOM EW (1/N)"),
     ]:
         r = summarise(s.dropna(), lbl)
         print(
-            f"  {r['Strategy']:<38} "
+            f"  {r['Strategy']:<42} "
             f"{r['Ann. Return']:>8.2%} "
             f"{r['Ann. Vol']:>7.2%} "
             f"{r['Sharpe']:>7.3f} "
@@ -468,6 +648,18 @@ def main():
             f"{r['WinRate']:>7.1%} "
             f"{r['MaxDD']:>8.1%}"
         )
+
+    # ── 7. Industribidrag og eksponering 2023-2025 ─────────────
+    IND_START, IND_END = "2023-01-01", "2025-12-31"
+    print(f"\nBeregner industribidrag og eksponering ({IND_START[:4]}–{IND_END[:4]})...")
+
+    for lo in [False, True]:
+        print_industry_contribution_table(
+            excess, tsmom, corr_shrunk, vols, GAMMA, w=W,
+            start=IND_START, end=IND_END, long_only=lo)
+        print_industry_exposure_table(
+            excess, tsmom, corr_shrunk, vols, GAMMA, w=W,
+            start=IND_START, end=IND_END, long_only=lo)
 
     # ── 7. Figurer ─────────────────────────────────────────────
     print("\nGenererer figurer...")
